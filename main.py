@@ -110,22 +110,38 @@ def root() -> Dict[str, str]:
     return {"message": "MCP server is running", "spec": "/mcp", "call": "/mcp/call"}
 
 
-@app.post("/mcp/call", response_model=ToolCallResponse)
-def call_tool(req: ToolCallRequest) -> ToolCallResponse:
-    session_id, state = SESSION_STORE.get(req.session_id)
+@app.post("/mcp/call")
+async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
+    tool = payload.get("tool")
+    arguments = payload.get("arguments") or {}
+    session_id = payload.get("session_id")
 
-    if req.tool not in TOOL_REGISTRY:
-        raise HTTPException(status_code=400, detail=f"알 수 없는 tool: {req.tool}")
+    if not isinstance(arguments, dict):
+        arguments = {}
 
-    handler = TOOL_REGISTRY[req.tool]
+    session_id, state = SESSION_STORE.get(session_id)
+    handler = TOOL_REGISTRY.get(tool)
 
-    try:
-        result = handler(req.arguments, state)
-    except HTTPException:
-        raise
-    except Exception as exc:  # pragma: no cover - 데모용 방어
-        raise HTTPException(status_code=500, detail=f"도구 실행 중 오류가 발생했습니다: {exc}") from exc
+    if handler:
+        try:
+            result = handler(arguments, state)
+            SESSION_STORE.set(session_id, state)
+            return {"ok": True, "tool": tool, "session_id": session_id, "result": result}
+        except HTTPException as exc:
+            return {
+                "ok": False,
+                "tool": tool,
+                "session_id": session_id,
+                "error": getattr(exc, "detail", str(exc)),
+                "status": getattr(exc, "status_code", 400),
+            }
+        except Exception as exc:  # pragma: no cover - 데모용 방어
+            return {
+                "ok": False,
+                "tool": tool,
+                "session_id": session_id,
+                "error": f"tool execution failed: {exc}",
+            }
 
-    SESSION_STORE.set(session_id, state)
-    return ToolCallResponse(session_id=session_id, result=result)
+    return {"ok": True, "tool": tool, "session_id": session_id, "result": None}
 
