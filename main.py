@@ -59,7 +59,7 @@ MCP_SPEC = {
         {
             "name": "normalize_user_context",
             "description": "사용자 발화를 상황 정보로 정리합니다",
-            "input_schema": {
+            "inputSchema": {
                 "type": "object",
                 "properties": {
                     "message": {
