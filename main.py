@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any, Callable, Dict, List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 
 from state import SESSION_STORE, SessionState
 from tools.actions import generate_action_steps
@@ -50,6 +53,7 @@ MCP_SPEC = {
     "endpoints": {
         "spec": "/mcp",
         "call": "/mcp/call",
+        "sse": "/sse",
     },
     "tools": [
         {
@@ -146,9 +150,41 @@ async def root(payload: Dict[str, Any] | None = None) -> JSONResponse:
             "mcp": True,
             "name": "public-support-mcp",
             "version": "0.50-demo",
-            "endpoints": {"spec": "/mcp", "call": "/mcp/call"},
+            "endpoints": {"spec": "/mcp", "call": "/mcp/call", "sse": "/sse"},
         }
     )
+
+
+@app.get("/sse")
+async def sse_endpoint(request: Request):
+    """PlayMCP가 인식하는 SSE 스트림 엔드포인트"""
+    
+    async def event_generator():
+        # 초기 연결 시 MCP 서버 정보 전송
+        yield {
+            "event": "message",
+            "data": json.dumps({
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": MCP_SPEC
+            })
+        }
+        
+        # 연결 유지 (클라이언트 연결 끊기면 종료)
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                # 주기적으로 heartbeat 전송
+                yield {
+                    "event": "ping",
+                    "data": json.dumps({"status": "alive"})
+                }
+                await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            pass
+    
+    return EventSourceResponse(event_generator())
 
 
 @app.post("/mcp/call")
