@@ -36,6 +36,10 @@ MCP_SPEC = {
     "name": "public-support-mcp",
     "version": "0.50-demo",
     "description": "공공 지원 내비게이터: 판정이 아닌 선택지·행동 설계 중심의 MCP 서버 (데모용)",
+    "endpoints": {
+        "spec": "/mcp",
+        "call": "/mcp/call",
+    },
     "tools": [
         {
             "name": "normalize_user_context",
