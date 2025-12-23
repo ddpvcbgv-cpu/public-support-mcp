@@ -143,8 +143,9 @@ async def get_mcp_spec(_: Dict[str, Any] | None = None) -> JSONResponse:
 async def root(payload: Dict[str, Any] | None = None) -> JSONResponse:
     return JSONResponse(
         {
-            "message": "MCP server is running",
             "mcp": True,
+            "name": "public-support-mcp",
+            "version": "0.50-demo",
             "endpoints": {"spec": "/mcp", "call": "/mcp/call"},
         }
     )
