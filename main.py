@@ -135,13 +135,19 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
 
 
 @app.api_route("/mcp", methods=["GET", "POST"])
-def get_mcp_spec() -> Dict[str, Any]:
-    return MCP_SPEC
+async def get_mcp_spec(_: Dict[str, Any] | None = None) -> JSONResponse:
+    return JSONResponse(MCP_SPEC)
 
 
 @app.api_route("/", methods=["GET", "POST"])
 async def root(payload: Dict[str, Any] | None = None) -> JSONResponse:
-    return JSONResponse({"message": "MCP server is running"})
+    return JSONResponse(
+        {
+            "message": "MCP server is running",
+            "mcp": True,
+            "endpoints": {"spec": "/mcp", "call": "/mcp/call"},
+        }
+    )
 
 
 @app.post("/mcp/call")
