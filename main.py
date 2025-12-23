@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from state import SESSION_STORE, SessionState
@@ -104,6 +105,25 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
 }
 
 
+def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = None, error: str | None = None) -> List[Dict[str, str]]:
+    message_text: str | None = None
+    message_arg = arguments.get("message") if isinstance(arguments, dict) else None
+
+    if tool == "normalize_user_context":
+        if isinstance(result, dict) and result.get("summary"):
+            message_text = str(result.get("summary"))
+        elif message_arg:
+            message_text = f"입력하신 내용을 기준으로 상황을 정리했습니다: {message_arg}"
+
+    if not message_text:
+        if error:
+            message_text = f"tool '{tool}' 처리 중 오류가 있었으나 연결은 유지됩니다: {error}"
+        else:
+            message_text = f"tool '{tool}'이 정상적으로 처리되었습니다."
+
+    return [{"type": "text", "text": message_text}]
+
+
 @app.get("/mcp")
 def get_mcp_spec() -> Dict[str, Any]:
     return MCP_SPEC
@@ -126,73 +146,50 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
     session_id, state = SESSION_STORE.get(session_id)
     handler = TOOL_REGISTRY.get(tool)
 
-    def _content_message(ok: bool, result: Any = None, error: str | None = None) -> str:
-        if tool == "normalize_user_context" and isinstance(result, dict):
-            summary = result.get("summary")
-            if summary:
-                return summary
-        if ok:
-            return f"tool '{tool}'이 정상적으로 처리되었습니다."
-        return f"tool '{tool}' 처리 중 오류가 발생했지만 연결은 유지되었습니다: {error}"
-
     if handler:
         try:
             result = handler(arguments, state)
             SESSION_STORE.set(session_id, state)
-            return {
+            response = {
                 "ok": True,
                 "tool": tool,
                 "arguments": arguments,
                 "session_id": session_id,
                 "result": result,
-                "content": [
-                    {
-                        "type": "text",
-                        "text": _content_message(True, result=result),
-                    }
-                ],
+                "content": _build_content(tool, arguments, result=result),
             }
+            return JSONResponse(response)
         except HTTPException as exc:
-            return {
+            error_detail = getattr(exc, "detail", str(exc))
+            response = {
                 "ok": False,
                 "tool": tool,
                 "arguments": arguments,
                 "session_id": session_id,
-                "error": getattr(exc, "detail", str(exc)),
+                "error": error_detail,
                 "status": getattr(exc, "status_code", 400),
-                "content": [
-                    {
-                        "type": "text",
-                        "text": _content_message(False, error=getattr(exc, "detail", str(exc))),
-                    }
-                ],
+                "content": _build_content(tool, arguments, error=error_detail),
             }
+            return JSONResponse(response)
         except Exception as exc:  # pragma: no cover - 데모용 방어
-            return {
+            error_detail = f"tool execution failed: {exc}"
+            response = {
                 "ok": False,
                 "tool": tool,
                 "arguments": arguments,
                 "session_id": session_id,
-                "error": f"tool execution failed: {exc}",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": _content_message(False, error=str(exc)),
-                    }
-                ],
+                "error": error_detail,
+                "content": _build_content(tool, arguments, error=error_detail),
             }
+            return JSONResponse(response)
 
-    return {
+    response = {
         "ok": True,
         "tool": tool,
         "arguments": arguments,
         "session_id": session_id,
         "result": None,
-        "content": [
-            {
-                "type": "text",
-                "text": f"요청한 tool '{tool}'을 찾지 못했지만 연결은 정상이며 추가 동작은 수행하지 않았습니다.",
-            }
-        ],
+        "content": _build_content(tool, arguments, result=None),
     }
+    return JSONResponse(response)
 
