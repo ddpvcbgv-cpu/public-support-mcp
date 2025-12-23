@@ -145,6 +145,72 @@ async def get_mcp_spec(_: Dict[str, Any] | None = None) -> JSONResponse:
 
 @app.api_route("/", methods=["GET", "POST"])
 async def root(payload: Dict[str, Any] | None = None) -> JSONResponse:
+    """
+    GET: 기본 서버 정보 반환
+    POST: JSON-RPC 2.0 기반 MCP initialize 요청 처리
+    """
+    # POST 요청이고 JSON-RPC method가 있으면 MCP 프로토콜로 처리
+    if payload and isinstance(payload, dict):
+        method = payload.get("method")
+        request_id = payload.get("id")
+        
+        if method == "initialize":
+            # MCP initialize 응답
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "serverInfo": {
+                        "name": "public-support-mcp",
+                        "version": "0.50-demo"
+                    },
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {}
+                    }
+                }
+            })
+        elif method == "tools/list":
+            # tools 목록 반환
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "tools": MCP_SPEC["tools"]
+                }
+            })
+        elif method == "tools/call":
+            # tool 호출 처리 (기존 /mcp/call 로직 재사용)
+            params = payload.get("params", {})
+            tool_name = params.get("name")
+            arguments = params.get("arguments", {})
+            
+            session_id, state = SESSION_STORE.get(None)
+            handler = TOOL_REGISTRY.get(tool_name)
+            
+            if handler:
+                try:
+                    result = handler(arguments, state)
+                    SESSION_STORE.set(session_id, state)
+                    return JSONResponse({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {
+                            "content": _build_content(tool_name, arguments, result=result)
+                        }
+                    })
+                except Exception as exc:
+                    return JSONResponse({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32603,
+                            "message": str(exc)
+                        }
+                    })
+    
+    # GET 또는 일반 요청: 서버 정보 반환
     return JSONResponse(
         {
             "mcp": True,
