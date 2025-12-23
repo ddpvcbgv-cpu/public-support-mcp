@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,15 @@ app = FastAPI(
     title="Public Support Navigator MCP",
     version="0.50-demo",
     description="판정이 아니라 선택지와 행동 설계에 집중하는 공공 지원 내비게이터 (데모)",
+)
+
+# CORS: PlayMCP 등 외부 클라이언트 호환을 위해 최소 허용
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 MCP_SPEC = {
@@ -124,7 +134,7 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
     return [{"type": "text", "text": message_text}]
 
 
-@app.get("/mcp")
+@app.api_route("/mcp", methods=["GET", "POST"])
 def get_mcp_spec() -> Dict[str, Any]:
     return MCP_SPEC
 
