@@ -5,7 +5,6 @@ from typing import Any, Callable, Dict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from mcp_spec import get_spec
 from state import SESSION_STORE, SessionState
 from tools.actions import generate_action_steps
 from tools.cards import rank_support_cards
@@ -33,7 +32,27 @@ app = FastAPI(
     description="판정이 아니라 선택지와 행동 설계에 집중하는 공공 지원 내비게이터 (데모)",
 )
 
-MCP_SPEC = get_spec()
+MCP_SPEC = {
+    "name": "public-support-mcp",
+    "version": "0.50-demo",
+    "description": "공공 지원 내비게이터: 판정이 아닌 선택지·행동 설계 중심의 MCP 서버 (데모용)",
+    "tools": [
+        {
+            "name": "normalize_user_context",
+            "description": "사용자 발화를 상황 정보로 정리합니다",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "사용자 입력 문장",
+                    }
+                },
+                "required": ["message"],
+            },
+        }
+    ],
+}
 
 
 def _normalize(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
