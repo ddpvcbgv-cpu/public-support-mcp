@@ -163,17 +163,27 @@ async def root_post(request: Request) -> JSONResponse:
     # POST body 읽기
     try:
         body = await request.body()
+        body_str = body.decode('utf-8') if body else "{}"
+        
+        # 디버깅: 실제 요청 내용 로깅
+        print(f"[DEBUG] POST / received:")
+        print(f"  Headers: {dict(request.headers)}")
+        print(f"  Body: {body_str[:500]}")  # 처음 500자만
+        
         if body:
-            payload = json.loads(body.decode('utf-8'))
+            payload = json.loads(body_str)
         else:
             payload = {}
-    except:
+    except Exception as e:
+        print(f"[ERROR] Body parsing failed: {e}")
         payload = {}
     
     # JSON-RPC method 처리
     if payload and isinstance(payload, dict):
         method = payload.get("method")
         request_id = payload.get("id")
+        
+        print(f"[DEBUG] Parsed - method: {method}, id: {request_id}")
         
         if method == "initialize":
             # MCP initialize 응답
