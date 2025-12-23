@@ -130,11 +130,18 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
             result = handler(arguments, state)
             SESSION_STORE.set(session_id, state)
-            return {"ok": True, "tool": tool, "session_id": session_id, "result": result}
+            return {
+                "ok": True,
+                "tool": tool,
+                "arguments": arguments,
+                "session_id": session_id,
+                "result": result,
+            }
         except HTTPException as exc:
             return {
                 "ok": False,
                 "tool": tool,
+                "arguments": arguments,
                 "session_id": session_id,
                 "error": getattr(exc, "detail", str(exc)),
                 "status": getattr(exc, "status_code", 400),
@@ -143,9 +150,16 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
             return {
                 "ok": False,
                 "tool": tool,
+                "arguments": arguments,
                 "session_id": session_id,
                 "error": f"tool execution failed: {exc}",
             }
 
-    return {"ok": True, "tool": tool, "session_id": session_id, "result": None}
+    return {
+        "ok": True,
+        "tool": tool,
+        "arguments": arguments,
+        "session_id": session_id,
+        "result": None,
+    }
 
