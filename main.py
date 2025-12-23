@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any, Callable, Dict, List
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -143,13 +143,34 @@ async def get_mcp_spec(_: Dict[str, Any] | None = None) -> JSONResponse:
     return JSONResponse(MCP_SPEC)
 
 
-@app.api_route("/", methods=["GET", "POST"])
-async def root(payload: Dict[str, Any] | None = None) -> JSONResponse:
-    """
-    GET: 기본 서버 정보 반환
-    POST: JSON-RPC 2.0 기반 MCP initialize 요청 처리
-    """
-    # POST 요청이고 JSON-RPC method가 있으면 MCP 프로토콜로 처리
+@app.get("/")
+async def root_get() -> JSONResponse:
+    """GET: 기본 서버 정보 반환"""
+    return JSONResponse(
+        {
+            "mcp": True,
+            "name": "public-support-mcp",
+            "version": "0.50-demo",
+            "endpoints": {"spec": "/mcp", "call": "/mcp/call", "sse": "/sse"},
+        }
+    )
+
+
+@app.post("/")
+async def root_post(request: Request) -> JSONResponse:
+    """POST: JSON-RPC 2.0 기반 MCP 프로토콜 처리"""
+    
+    # POST body 읽기
+    try:
+        body = await request.body()
+        if body:
+            payload = json.loads(body.decode('utf-8'))
+        else:
+            payload = {}
+    except:
+        payload = {}
+    
+    # JSON-RPC method 처리
     if payload and isinstance(payload, dict):
         method = payload.get("method")
         request_id = payload.get("id")
@@ -210,7 +231,7 @@ async def root(payload: Dict[str, Any] | None = None) -> JSONResponse:
                         }
                     })
     
-    # GET 또는 일반 요청: 서버 정보 반환
+    # method가 없거나 알 수 없는 요청: 기본 서버 정보 반환
     return JSONResponse(
         {
             "mcp": True,
