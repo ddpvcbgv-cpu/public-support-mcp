@@ -139,9 +139,9 @@ def get_mcp_spec() -> Dict[str, Any]:
     return MCP_SPEC
 
 
-@app.get("/")
-def root() -> Dict[str, str]:
-    return {"message": "MCP server is running", "spec": "/mcp", "call": "/mcp/call"}
+@app.api_route("/", methods=["GET", "POST"])
+async def root(payload: Dict[str, Any] | None = None) -> JSONResponse:
+    return JSONResponse({"message": "MCP server is running"})
 
 
 @app.post("/mcp/call")
