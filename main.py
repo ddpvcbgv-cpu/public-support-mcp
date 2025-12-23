@@ -126,6 +126,15 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
     session_id, state = SESSION_STORE.get(session_id)
     handler = TOOL_REGISTRY.get(tool)
 
+    def _content_message(ok: bool, result: Any = None, error: str | None = None) -> str:
+        if tool == "normalize_user_context" and isinstance(result, dict):
+            summary = result.get("summary")
+            if summary:
+                return summary
+        if ok:
+            return f"tool '{tool}'이 정상적으로 처리되었습니다."
+        return f"tool '{tool}' 처리 중 오류가 발생했지만 연결은 유지되었습니다: {error}"
+
     if handler:
         try:
             result = handler(arguments, state)
@@ -136,6 +145,12 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "arguments": arguments,
                 "session_id": session_id,
                 "result": result,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": _content_message(True, result=result),
+                    }
+                ],
             }
         except HTTPException as exc:
             return {
@@ -145,6 +160,12 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "session_id": session_id,
                 "error": getattr(exc, "detail", str(exc)),
                 "status": getattr(exc, "status_code", 400),
+                "content": [
+                    {
+                        "type": "text",
+                        "text": _content_message(False, error=getattr(exc, "detail", str(exc))),
+                    }
+                ],
             }
         except Exception as exc:  # pragma: no cover - 데모용 방어
             return {
@@ -153,6 +174,12 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "arguments": arguments,
                 "session_id": session_id,
                 "error": f"tool execution failed: {exc}",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": _content_message(False, error=str(exc)),
+                    }
+                ],
             }
 
     return {
@@ -161,5 +188,11 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
         "arguments": arguments,
         "session_id": session_id,
         "result": None,
+        "content": [
+            {
+                "type": "text",
+                "text": f"요청한 tool '{tool}'을 찾지 못했지만 연결은 정상이며 추가 동작은 수행하지 않았습니다.",
+            }
+        ],
     }
 
