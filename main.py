@@ -223,25 +223,30 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
             domain = result.get("domain", "")
             cards = result.get("cards", [])
             if cards:
-                text = f"【{domain}】 추천 혜택 (적합도 순):\n\n"
+                text = f"【{domain}】 추천 혜택 (적합도 순위):\n\n"
                 for i, card in enumerate(cards, 1):
                     score = card.get('eligibility_score', 0)
                     # 🆕 점수에 따른 이모지 배지
                     if score >= 80:
-                        badge = "🔥 강력추천"
+                        badge = "🔥"
+                        level = "강력 추천"
                     elif score >= 60:
-                        badge = "✨ 추천"
+                        badge = "✨"
+                        level = "추천"
                     else:
-                        badge = "💡 참고"
+                        badge = "💡"
+                        level = "참고"
                     
-                    text += f"{i}. {badge} {card.get('card', '')} (적합도: {score}%)\n"
-                    text += f"   설명: {card.get('description', '')}\n"
-                    text += f"   이유: {card.get('why', '')}\n"
+                    # 제목에 점수 강조 (AI가 제거하지 못하도록)
+                    text += f"\n{badge} [{level}] {card.get('card', '')}\n"
+                    text += f"▸ 당신의 상황 적합도: {score}점/100점\n"
+                    text += f"▸ 설명: {card.get('description', '')}\n"
+                    text += f"▸ 추천 이유: {card.get('why', '')}\n"
                     if card.get('where'):
-                        text += f"   📍 어디로: {card.get('where', '')}\n"
+                        text += f"▸ 📞 연락처: {card.get('where', '')}\n"
                     if card.get('how'):
-                        text += f"   📝 방법: {card.get('how', '')}\n"
-                    text += f"   💬 말씀하실 때: {card.get('say', '')}\n\n"
+                        text += f"▸ 신청 방법: {card.get('how', '')}\n"
+                    text += f"▸ 💬 상담 시 말씀: {card.get('say', '')}\n"
                 return [{"type": "text", "text": text}]
     
     elif tool == "generate_action_steps":
