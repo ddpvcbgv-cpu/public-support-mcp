@@ -96,6 +96,7 @@ MCP_SPEC = {
             "inputSchema": {
                 "type": "object",
                 "properties": {},
+                "additionalProperties": False,
             },
         },
         {
@@ -110,6 +111,7 @@ MCP_SPEC = {
                         "enum": ["주거·월세", "생활 유지", "의료·돌봄", "고용·교육", "심리·정서"]
                     }
                 },
+                "required": [],
             },
         },
         {
@@ -118,6 +120,7 @@ MCP_SPEC = {
             "inputSchema": {
                 "type": "object",
                 "properties": {},
+                "additionalProperties": False,
             },
         },
         {
@@ -126,6 +129,7 @@ MCP_SPEC = {
             "inputSchema": {
                 "type": "object",
                 "properties": {},
+                "additionalProperties": False,
             },
         },
         {
@@ -134,6 +138,7 @@ MCP_SPEC = {
             "inputSchema": {
                 "type": "object",
                 "properties": {},
+                "additionalProperties": False,
             },
         },
     ],
@@ -486,7 +491,9 @@ async def root_post(request: Request) -> JSONResponse:
                         "version": "0.50-demo"
                     },
                     "capabilities": {
-                        "tools": {},
+                        "tools": {
+                            "listChanged": False
+                        },
                         "resources": {}
                     }
                 }
@@ -509,6 +516,17 @@ async def root_post(request: Request) -> JSONResponse:
             session_id, state = SESSION_STORE.get(None)
             handler = TOOL_REGISTRY.get(tool_name)
             
+            if not handler:
+                # 프로토콜 오류: 알 수 없는 도구
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32602,
+                        "message": f"Unknown tool: {tool_name}"
+                    }
+                })
+            
             if handler:
                 try:
                     result = handler(arguments, state)
@@ -525,6 +543,7 @@ async def root_post(request: Request) -> JSONResponse:
                                 "content": [{"type": "text", "text": rich_response.content}],
                                 "attachments": [att.model_dump() for att in rich_response.attachments],
                                 "metadata": rich_response.metadata,
+                                "isError": False,
                             }
                         })
                     else:
@@ -532,16 +551,18 @@ async def root_post(request: Request) -> JSONResponse:
                             "jsonrpc": "2.0",
                             "id": request_id,
                             "result": {
-                                "content": _build_content(tool_name, arguments, result=result)
+                                "content": _build_content(tool_name, arguments, result=result),
+                                "isError": False,
                             }
                         })
                 except Exception as exc:
+                    # 도구 실행 오류: isError 플래그와 함께 반환
                     return JSONResponse({
                         "jsonrpc": "2.0",
                         "id": request_id,
-                        "error": {
-                            "code": -32603,
-                            "message": str(exc)
+                        "result": {
+                            "content": [{"type": "text", "text": f"도구 실행 중 오류: {str(exc)}"}],
+                            "isError": True,
                         }
                     })
     
@@ -601,6 +622,18 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
     session_id, state = SESSION_STORE.get(session_id)
     handler = TOOL_REGISTRY.get(tool)
 
+    if not handler:
+        # 알 수 없는 도구
+        return JSONResponse({
+            "ok": False,
+            "tool": tool,
+            "arguments": arguments,
+            "session_id": session_id,
+            "error": f"Unknown tool: {tool}",
+            "content": [{"type": "text", "text": f"알 수 없는 도구: {tool}"}],
+            "isError": True,
+        })
+
     if handler:
         try:
             result = handler(arguments, state)
@@ -618,6 +651,7 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "content": rich_response.content,
                     "attachments": [att.model_dump() for att in rich_response.attachments],
                     "metadata": rich_response.metadata,
+                    "isError": False,
                 }
             else:
                 response = {
@@ -627,9 +661,11 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "session_id": session_id,
                     "result": result,
                     "content": _build_content(tool, arguments, result=result),
+                    "isError": False,
                 }
             return JSONResponse(response)
         except HTTPException as exc:
+            # 도구 실행 오류 (입력 검증 등)
             error_detail = getattr(exc, "detail", str(exc))
             response = {
                 "ok": False,
@@ -638,10 +674,12 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "session_id": session_id,
                 "error": error_detail,
                 "status": getattr(exc, "status_code", 400),
-                "content": _build_content(tool, arguments, error=error_detail),
+                "content": [{"type": "text", "text": f"입력 오류: {error_detail}"}],
+                "isError": True,
             }
             return JSONResponse(response)
         except Exception as exc:  # pragma: no cover - 데모용 방어
+            # 도구 실행 오류 (예상치 못한 오류)
             error_detail = f"tool execution failed: {exc}"
             response = {
                 "ok": False,
@@ -649,17 +687,8 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "arguments": arguments,
                 "session_id": session_id,
                 "error": error_detail,
-                "content": _build_content(tool, arguments, error=error_detail),
+                "content": [{"type": "text", "text": f"실행 오류: {error_detail}"}],
+                "isError": True,
             }
             return JSONResponse(response)
-
-    response = {
-        "ok": True,
-        "tool": tool,
-        "arguments": arguments,
-        "session_id": session_id,
-        "result": None,
-        "content": _build_content(tool, arguments, result=None),
-    }
-    return JSONResponse(response)
 
