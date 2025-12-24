@@ -224,23 +224,11 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
             cards = result.get("cards", [])
             if cards:
                 # v0.50 엔진 철학 반영: "선택지를 차분하게 정리"
-                text = f"【{domain}】 분야에서 지금 단계에 맞는 선택지를 정리해봤어요:\n\n"
+                text = f"지금 상황을 기준으로 보면, {domain} 분야에서 열려 있는 선택지를 정리해봤어요.\n\n"
+                
                 for i, card in enumerate(cards, 1):
-                    score = card.get('eligibility_score', 0)
-                    # 점수에 따른 배지
-                    if score >= 80:
-                        badge = "🔥"
-                        level = "강력 추천"
-                    elif score >= 60:
-                        badge = "✨"
-                        level = "추천"
-                    else:
-                        badge = "💡"
-                        level = "참고"
-                    
-                    # v0.50 구조: "이게 뭐냐면" / "왜 지금 맞냐면"
-                    text += f"\n{badge} [{level}] {card.get('card', '')}\n"
-                    text += f"▸ 당신의 상황 적합도: {score}점/100점\n\n"
+                    # 점수 제거, 카드명만 표시
+                    text += f"\n[{card.get('card', '')}]\n\n"
                     
                     if card.get('이게_뭐냐면'):
                         text += f"이게 뭐냐면:\n{card.get('이게_뭐냐면')}\n\n"
@@ -248,19 +236,17 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
                     if card.get('왜_지금_맞냐면'):
                         text += f"왜 지금 맞냐면:\n{card.get('왜_지금_맞냐면')}\n\n"
                     
+                    if card.get('지금_하실_수_있는_말'):
+                        text += f"지금 하실 수 있는 말:\n\"{card.get('지금_하실_수_있는_말')}\"\n\n"
+                    
                     if card.get('where'):
                         text += f"어디로:\n{card.get('where')}\n\n"
                     
                     if card.get('how'):
                         text += f"방법:\n{card.get('how')}\n\n"
                     
-                    if card.get('지금_하실_수_있는_말'):
-                        text += f"💬 지금 하실 수 있는 말:\n\"{card.get('지금_하실_수_있는_말')}\"\n\n"
-                    
                     if card.get('막히면'):
-                        text += f"막히면:\n{card.get('막히면')}\n"
-                    
-                    text += "\n" + "─" * 40 + "\n"
+                        text += f"막히면:\n{card.get('막히면')}\n\n"
                 
                 return [{"type": "text", "text": text}]
     
