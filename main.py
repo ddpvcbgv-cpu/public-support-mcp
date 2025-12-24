@@ -178,22 +178,77 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
 
 
 def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = None, error: str | None = None) -> List[Dict[str, str]]:
-    message_text: str | None = None
-    message_arg = arguments.get("message") if isinstance(arguments, dict) else None
-
+    """도구 실행 결과를 AI가 읽을 수 있는 텍스트로 변환"""
+    if error:
+        return [{"type": "text", "text": f"도구 실행 중 오류: {error}"}]
+    
+    if not result:
+        return [{"type": "text", "text": "결과 없음"}]
+    
+    # 각 도구별 결과 포맷팅
     if tool == "normalize_user_context":
-        if isinstance(result, dict) and result.get("summary"):
-            message_text = str(result.get("summary"))
-        elif message_arg:
-            message_text = f"입력하신 내용을 기준으로 상황을 정리했습니다: {message_arg}"
-
-    if not message_text:
-        if error:
-            message_text = f"tool '{tool}' 처리 중 오류가 있었으나 연결은 유지됩니다: {error}"
-        else:
-            message_text = f"tool '{tool}'이 정상적으로 처리되었습니다."
-
-    return [{"type": "text", "text": message_text}]
+        if isinstance(result, dict):
+            summary = result.get("summary", "")
+            keywords = result.get("keywords", [])
+            text = f"{summary}\n추출된 키워드: {', '.join(keywords)}" if keywords else summary
+            return [{"type": "text", "text": text}]
+    
+    elif tool == "assess_urgency_level":
+        if isinstance(result, dict):
+            level = result.get("urgency_level", 3)
+            level_text = {1: "매우 긴급", 2: "긴급", 3: "보통"}
+            return [{"type": "text", "text": f"긴급도: {level_text.get(level, '보통')} (레벨 {level})"}]
+    
+    elif tool == "expose_available_domains":
+        if isinstance(result, dict):
+            domains = result.get("domains", [])
+            if domains:
+                text = "현재 상황에서 열려 있는 지원 분야:\n" + "\n".join(f"- {d}" for d in domains)
+                return [{"type": "text", "text": text}]
+    
+    elif tool == "rank_support_cards":
+        if isinstance(result, dict):
+            domain = result.get("domain", "")
+            cards = result.get("cards", [])
+            if cards:
+                text = f"【{domain}】 추천 카드:\n\n"
+                for i, card in enumerate(cards, 1):
+                    text += f"{i}. {card.get('card', '')}\n"
+                    text += f"   설명: {card.get('description', '')}\n"
+                    text += f"   이유: {card.get('why', '')}\n"
+                    text += f"   말씀하실 때: {card.get('say', '')}\n\n"
+                return [{"type": "text", "text": text}]
+    
+    elif tool == "generate_action_steps":
+        if isinstance(result, dict):
+            today = result.get("today", "")
+            tomorrow = result.get("tomorrow", "")
+            stuck = result.get("stuck", "")
+            text = f"【행동 단계】\n\n오늘: {today}\n\n내일: {tomorrow}\n\n막히면: {stuck}"
+            return [{"type": "text", "text": text}]
+    
+    elif tool == "generate_fallback_paths":
+        if isinstance(result, dict):
+            text = "【대안 경로】\n\n"
+            if "call_issue" in result:
+                text += f"전화 연결 어려움: {result['call_issue']}\n\n"
+            if "docs_issue" in result:
+                text += f"서류 준비 어려움: {result['docs_issue']}\n\n"
+            if "eligibility_issue" in result:
+                text += f"자격 애매함: {result['eligibility_issue']}"
+            return [{"type": "text", "text": text}]
+    
+    elif tool == "compose_safe_response":
+        if isinstance(result, str):
+            return [{"type": "text", "text": result}]
+    
+    # 기본 폴백: JSON 직렬화
+    import json
+    try:
+        text = json.dumps(result, ensure_ascii=False, indent=2)
+        return [{"type": "text", "text": text}]
+    except:
+        return [{"type": "text", "text": str(result)}]
 
 
 @app.api_route("/mcp", methods=["GET", "POST"])
