@@ -7,7 +7,17 @@ from state import SessionState
 
 def generate_action_steps(state: SessionState) -> Dict[str, str]:
     """지금 바로 할 수 있는 1~3단계 행동을 제안한다."""
-    domain = state.chosen_domain or "생활 유지"
+    # 가장 최근 키워드를 기반으로 도메인 추측
+    from tools.domains import DOMAIN_HINTS, DOMAIN_PRIORITY
+    
+    domain = state.chosen_domain
+    if not domain and state.user_keywords:
+        for d, cues in DOMAIN_HINTS.items():
+            if any(cue in state.user_keywords for cue in cues):
+                domain = d
+                break
+    
+    domain = domain or DOMAIN_PRIORITY[0]
 
     today = (
         "오늘은 짧게 상황을 한 문장으로 정리해두세요. 예) “월세 연체 걱정, 이번 달 생활비 부족”. "

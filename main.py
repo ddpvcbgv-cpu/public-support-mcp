@@ -98,7 +98,7 @@ MCP_SPEC = {
         },
         {
             "name": "rank_support_cards",
-            "description": "우선 탐색할 혜택 카드 2~3개를 제안합니다",
+            "description": "우선 탐색할 지원 혜택 2~3개를 제안합니다",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -221,12 +221,16 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
             domain = result.get("domain", "")
             cards = result.get("cards", [])
             if cards:
-                text = f"【{domain}】 추천 카드:\n\n"
+                text = f"【{domain}】 추천 혜택:\n\n"
                 for i, card in enumerate(cards, 1):
                     text += f"{i}. {card.get('card', '')}\n"
                     text += f"   설명: {card.get('description', '')}\n"
                     text += f"   이유: {card.get('why', '')}\n"
-                    text += f"   말씀하실 때: {card.get('say', '')}\n\n"
+                    if card.get('where'):
+                        text += f"   📍 어디로: {card.get('where', '')}\n"
+                    if card.get('how'):
+                        text += f"   📝 방법: {card.get('how', '')}\n"
+                    text += f"   💬 말씀하실 때: {card.get('say', '')}\n\n"
                 return [{"type": "text", "text": text}]
     
     elif tool == "generate_action_steps":
