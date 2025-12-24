@@ -26,6 +26,10 @@ def _deduplicate(items: List[str]) -> List[str]:
 
 def normalize_user_context(message: str, state: SessionState) -> Dict[str, object]:
     """정제된 요약과 키워드를 반환하고 세션 상태를 업데이트."""
+    # 🆕 대화 히스토리 업데이트
+    from tools.intent import update_conversation_history
+    from tools.scoring import update_user_profile_from_keywords
+    
     extracted: List[str] = []
     for keywords in THEME_KEYWORDS.values():
         for word in keywords:
@@ -34,6 +38,12 @@ def normalize_user_context(message: str, state: SessionState) -> Dict[str, objec
 
     merged_keywords = _deduplicate(state.user_keywords + extracted)
     state.user_keywords = merged_keywords
+
+    # 🆕 대화 히스토리에 추가
+    update_conversation_history(message, state, keywords=extracted)
+    
+    # 🆕 사용자 프로파일 업데이트
+    update_user_profile_from_keywords(state)
 
     if extracted:
         sample = ", ".join(extracted[:3])

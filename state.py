@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from schemas import ConversationTurn, UserProfile
+
 
 class SessionState(BaseModel):
     user_keywords: List[str] = Field(default_factory=list)
@@ -18,6 +20,11 @@ class SessionState(BaseModel):
     urgency_level: int = 3
     region_hint: Optional[str] = None
     handoff_intent: Optional[str] = None
+    
+    # 🆕 Context-Aware 확장
+    conversation_history: List[ConversationTurn] = Field(default_factory=list, description="대화 히스토리")
+    user_profile: UserProfile = Field(default_factory=UserProfile, description="추론된 사용자 프로파일")
+    interaction_count: int = Field(default=0, description="상호작용 횟수")
 
 
 class SessionStore:

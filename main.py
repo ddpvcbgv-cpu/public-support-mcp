@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from schemas import BenefitCard, RichAttachment, RichResponse, Visual, ProgressBar
 from state import SESSION_STORE, SessionState
 from tools.actions import generate_action_steps
 from tools.cards import rank_support_cards
@@ -17,6 +18,7 @@ from tools.domains import expose_available_domains
 from tools.fallback import generate_fallback_paths
 from tools.normalize import normalize_user_context
 from tools.safety import compose_safe_response
+from tools.scoring import get_profile_summary
 from tools.urgency import assess_urgency_level
 
 
@@ -188,7 +190,7 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
 
 
 def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = None, error: str | None = None) -> List[Dict[str, str]]:
-    """도구 실행 결과를 AI가 읽을 수 있는 텍스트로 변환"""
+    """도구 실행 결과를 AI가 읽을 수 있는 텍스트로 변환 (레거시 호환)"""
     if error:
         return [{"type": "text", "text": f"도구 실행 중 오류: {error}"}]
     
@@ -223,7 +225,8 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
             if cards:
                 text = f"【{domain}】 추천 혜택:\n\n"
                 for i, card in enumerate(cards, 1):
-                    text += f"{i}. {card.get('card', '')}\n"
+                    score = card.get('eligibility_score', 0)
+                    text += f"{i}. {card.get('card', '')} (적합도: {score}%)\n"
                     text += f"   설명: {card.get('description', '')}\n"
                     text += f"   이유: {card.get('why', '')}\n"
                     if card.get('where'):
@@ -263,6 +266,151 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
         return [{"type": "text", "text": text}]
     except:
         return [{"type": "text", "text": str(result)}]
+
+
+def _build_rich_response(
+    tool: str | None,
+    arguments: Dict[str, Any],
+    state: SessionState,
+    result: Any = None,
+    error: str | None = None
+) -> RichResponse:
+    """🆕 구조화된 Rich Response 생성"""
+    if error:
+        return RichResponse(
+            content=f"도구 실행 중 오류: {error}",
+            attachments=[],
+            metadata={"error": True}
+        )
+    
+    if not result:
+        return RichResponse(
+            content="결과 없음",
+            attachments=[],
+            metadata={}
+        )
+    
+    # 도구별 Rich Response 생성
+    if tool == "normalize_user_context":
+        summary = result.get("summary", "")
+        keywords = result.get("keywords", [])
+        
+        # 프로파일 정보 첨부
+        profile_summary = get_profile_summary(state)
+        
+        return RichResponse(
+            content=f"{summary}\n\n추출된 키워드: {', '.join(keywords)}\n프로파일: {profile_summary}",
+            attachments=[
+                RichAttachment(
+                    type="profile",
+                    data={
+                        "keywords": keywords,
+                        "profile": state.user_profile.model_dump(),
+                        "interaction_count": state.interaction_count,
+                    }
+                )
+            ],
+            metadata={"tool": tool}
+        )
+    
+    elif tool == "rank_support_cards":
+        domain = result.get("domain", "")
+        cards = result.get("cards", [])
+        
+        # 카드 첨부
+        card_attachments = []
+        for i, card in enumerate(cards, 1):
+            score = card.get("eligibility_score", 50)
+            
+            # 점수에 따른 색상
+            if score >= 80:
+                color = "#4CAF50"  # 녹색
+                badge = "강력 추천"
+            elif score >= 60:
+                color = "#2196F3"  # 파랑
+                badge = "추천"
+            else:
+                color = "#FF9800"  # 주황
+                badge = "참고"
+            
+            card_attachments.append(
+                RichAttachment(
+                    type="card",
+                    data={
+                        "title": card.get("card", ""),
+                        "description": card.get("description", ""),
+                        "eligibility_score": score,
+                        "where": card.get("where"),
+                        "how": card.get("how"),
+                        "say": card.get("say"),
+                        "why": card.get("why"),
+                        "visual": {
+                            "icon": "💡" if score >= 80 else "📋",
+                            "color": color,
+                            "badge": badge,
+                        }
+                    }
+                )
+            )
+        
+        content_text = f"【{domain}】 분야에서 {len(cards)}개 혜택을 찾았습니다.\n"
+        content_text += f"적합도 점수를 기반으로 정렬했습니다."
+        
+        return RichResponse(
+            content=content_text,
+            attachments=card_attachments,
+            metadata={"domain": domain, "count": len(cards)}
+        )
+    
+    elif tool == "generate_action_steps":
+        today = result.get("today", "")
+        tomorrow = result.get("tomorrow", "")
+        stuck = result.get("stuck", "")
+        
+        return RichResponse(
+            content="행동 단계를 3단계로 나눴습니다.",
+            attachments=[
+                RichAttachment(
+                    type="action",
+                    data={
+                        "phase": "today",
+                        "title": "오늘 할 일",
+                        "description": today,
+                        "estimated_time": "30분 이내",
+                        "difficulty": "easy",
+                    }
+                ),
+                RichAttachment(
+                    type="action",
+                    data={
+                        "phase": "tomorrow",
+                        "title": "내일 할 일",
+                        "description": tomorrow,
+                        "estimated_time": "1~2시간",
+                        "difficulty": "medium",
+                    }
+                ),
+                RichAttachment(
+                    type="action",
+                    data={
+                        "phase": "stuck",
+                        "title": "막힐 때",
+                        "description": stuck,
+                        "estimated_time": "상황별",
+                        "difficulty": "medium",
+                    }
+                ),
+            ],
+            metadata={"tool": tool}
+        )
+    
+    # 기타 도구는 기존 방식 사용
+    legacy_content = _build_content(tool, arguments, result, error)
+    return RichResponse(
+        content=legacy_content[0]["text"] if legacy_content else "결과 없음",
+        attachments=[],
+        metadata={"tool": tool, "legacy": True}
+    )
 
 
 @app.api_route("/mcp", methods=["GET", "POST"])
@@ -351,13 +499,28 @@ async def root_post(request: Request) -> JSONResponse:
                 try:
                     result = handler(arguments, state)
                     SESSION_STORE.set(session_id, state)
-                    return JSONResponse({
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {
-                            "content": _build_content(tool_name, arguments, result=result)
-                        }
-                    })
+                    
+                    # 🆕 Rich Response 생성 (선택적)
+                    use_rich = arguments.get("_use_rich_response", False)
+                    if use_rich:
+                        rich_response = _build_rich_response(tool_name, arguments, state, result=result)
+                        return JSONResponse({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "result": {
+                                "content": [{"type": "text", "text": rich_response.content}],
+                                "attachments": [att.model_dump() for att in rich_response.attachments],
+                                "metadata": rich_response.metadata,
+                            }
+                        })
+                    else:
+                        return JSONResponse({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "result": {
+                                "content": _build_content(tool_name, arguments, result=result)
+                            }
+                        })
                 except Exception as exc:
                     return JSONResponse({
                         "jsonrpc": "2.0",
@@ -416,6 +579,7 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
     tool = payload.get("tool")
     arguments = payload.get("arguments") or {}
     session_id = payload.get("session_id")
+    use_rich = payload.get("use_rich_response", False)  # 🆕 Rich Response 옵션
 
     if not isinstance(arguments, dict):
         arguments = {}
@@ -427,14 +591,29 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
             result = handler(arguments, state)
             SESSION_STORE.set(session_id, state)
-            response = {
-                "ok": True,
-                "tool": tool,
-                "arguments": arguments,
-                "session_id": session_id,
-                "result": result,
-                "content": _build_content(tool, arguments, result=result),
-            }
+            
+            # 🆕 Rich Response 생성
+            if use_rich:
+                rich_response = _build_rich_response(tool, arguments, state, result=result)
+                response = {
+                    "ok": True,
+                    "tool": tool,
+                    "arguments": arguments,
+                    "session_id": session_id,
+                    "result": result,
+                    "content": rich_response.content,
+                    "attachments": [att.model_dump() for att in rich_response.attachments],
+                    "metadata": rich_response.metadata,
+                }
+            else:
+                response = {
+                    "ok": True,
+                    "tool": tool,
+                    "arguments": arguments,
+                    "session_id": session_id,
+                    "result": result,
+                    "content": _build_content(tool, arguments, result=result),
+                }
             return JSONResponse(response)
         except HTTPException as exc:
             error_detail = getattr(exc, "detail", str(exc))
