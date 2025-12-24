@@ -69,7 +69,65 @@ MCP_SPEC = {
                 },
                 "required": ["message"],
             },
-        }
+        },
+        {
+            "name": "assess_urgency_level",
+            "description": "문맥을 기반으로 긴급도 레벨(1~3)을 추정합니다",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "context": {
+                        "type": "object",
+                        "description": "message 필드가 포함된 컨텍스트",
+                        "properties": {
+                            "message": {"type": "string"},
+                            "urgency_hint": {"type": "integer"}
+                        }
+                    }
+                },
+                "required": ["context"],
+            },
+        },
+        {
+            "name": "expose_available_domains",
+            "description": "현재 상황에서 열려 있는 지원 분야(주거·월세, 생활 유지, 의료·돌봄, 고용·교육, 심리·정서)를 제안합니다",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+        {
+            "name": "rank_support_cards",
+            "description": "우선 탐색할 혜택 카드 2~3개를 제안합니다",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+        {
+            "name": "generate_action_steps",
+            "description": "오늘/내일/막히면의 행동 단계를 제공합니다",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+        {
+            "name": "generate_fallback_paths",
+            "description": "전화/서류/자격에서 막힐 때의 대안 경로를 제시합니다",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+        {
+            "name": "compose_safe_response",
+            "description": "마지막에 붙는 감정 안전 문장을 반환합니다",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+            },
+        },
     ],
 }
 
