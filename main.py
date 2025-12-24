@@ -173,7 +173,7 @@ def _fallback(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
 
 
 def _safety(_: Dict[str, Any], state: SessionState) -> str:
-    return compose_safe_response()
+    return compose_safe_response(state)
 
 
 ToolHandler = Callable[[Dict[str, Any], SessionState], Any]
@@ -223,10 +223,11 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
             domain = result.get("domain", "")
             cards = result.get("cards", [])
             if cards:
-                text = f"【{domain}】 추천 혜택 (적합도 순위):\n\n"
+                # v0.50 엔진 철학 반영: "선택지를 차분하게 정리"
+                text = f"【{domain}】 분야에서 지금 단계에 맞는 선택지를 정리해봤어요:\n\n"
                 for i, card in enumerate(cards, 1):
                     score = card.get('eligibility_score', 0)
-                    # 🆕 점수에 따른 이모지 배지
+                    # 점수에 따른 배지
                     if score >= 80:
                         badge = "🔥"
                         level = "강력 추천"
@@ -237,16 +238,30 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
                         badge = "💡"
                         level = "참고"
                     
-                    # 제목에 점수 강조 (AI가 제거하지 못하도록)
+                    # v0.50 구조: "이게 뭐냐면" / "왜 지금 맞냐면"
                     text += f"\n{badge} [{level}] {card.get('card', '')}\n"
-                    text += f"▸ 당신의 상황 적합도: {score}점/100점\n"
-                    text += f"▸ 설명: {card.get('description', '')}\n"
-                    text += f"▸ 추천 이유: {card.get('why', '')}\n"
+                    text += f"▸ 당신의 상황 적합도: {score}점/100점\n\n"
+                    
+                    if card.get('이게_뭐냐면'):
+                        text += f"이게 뭐냐면:\n{card.get('이게_뭐냐면')}\n\n"
+                    
+                    if card.get('왜_지금_맞냐면'):
+                        text += f"왜 지금 맞냐면:\n{card.get('왜_지금_맞냐면')}\n\n"
+                    
                     if card.get('where'):
-                        text += f"▸ 📞 연락처: {card.get('where', '')}\n"
+                        text += f"어디로:\n{card.get('where')}\n\n"
+                    
                     if card.get('how'):
-                        text += f"▸ 신청 방법: {card.get('how', '')}\n"
-                    text += f"▸ 💬 상담 시 말씀: {card.get('say', '')}\n"
+                        text += f"방법:\n{card.get('how')}\n\n"
+                    
+                    if card.get('지금_하실_수_있는_말'):
+                        text += f"💬 지금 하실 수 있는 말:\n\"{card.get('지금_하실_수_있는_말')}\"\n\n"
+                    
+                    if card.get('막히면'):
+                        text += f"막히면:\n{card.get('막히면')}\n"
+                    
+                    text += "\n" + "─" * 40 + "\n"
+                
                 return [{"type": "text", "text": text}]
     
     elif tool == "generate_action_steps":
