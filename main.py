@@ -202,7 +202,7 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
         if isinstance(result, dict):
             summary = result.get("summary", "")
             keywords = result.get("keywords", [])
-            text = f"{summary}\n추출된 키워드: {', '.join(keywords)}" if keywords else summary
+            text = f"{summary}\n\n추출된 키워드: {', '.join(keywords)}" if keywords else summary
             return [{"type": "text", "text": text}]
     
     elif tool == "assess_urgency_level":
@@ -223,10 +223,18 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
             domain = result.get("domain", "")
             cards = result.get("cards", [])
             if cards:
-                text = f"【{domain}】 추천 혜택:\n\n"
+                text = f"【{domain}】 추천 혜택 (적합도 순):\n\n"
                 for i, card in enumerate(cards, 1):
                     score = card.get('eligibility_score', 0)
-                    text += f"{i}. {card.get('card', '')} (적합도: {score}%)\n"
+                    # 🆕 점수에 따른 이모지 배지
+                    if score >= 80:
+                        badge = "🔥 강력추천"
+                    elif score >= 60:
+                        badge = "✨ 추천"
+                    else:
+                        badge = "💡 참고"
+                    
+                    text += f"{i}. {badge} {card.get('card', '')} (적합도: {score}%)\n"
                     text += f"   설명: {card.get('description', '')}\n"
                     text += f"   이유: {card.get('why', '')}\n"
                     if card.get('where'):
