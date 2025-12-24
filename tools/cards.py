@@ -151,14 +151,20 @@ def _guess_domain(state: SessionState) -> str:
 
 def rank_support_cards(state: SessionState) -> Dict[str, object]:
     """우선 탐색할 혜택 카드 2~3개를 제안한다."""
+    # 🆕 스코어링 시스템 적용
+    from tools.scoring import rank_benefits_by_score
+    
     domain = state.chosen_domain or _guess_domain(state)
     available_cards = CARD_LIBRARY.get(domain, [])
 
     if not available_cards:
         available_cards = CARD_LIBRARY[DOMAIN_PRIORITY[0]]
 
+    # 🆕 점수 기반 정렬
+    scored_cards = rank_benefits_by_score(available_cards, state)
+    
     max_cards = 3 if state.urgency_level <= 2 else 2
-    selected = available_cards[:max_cards]
+    selected = scored_cards[:max_cards]
 
     state.shown_cards = _deduplicate(state.shown_cards + [card["card"] for card in selected])
     return {"domain": domain, "cards": selected}
