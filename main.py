@@ -101,7 +101,13 @@ MCP_SPEC = {
             "description": "우선 탐색할 혜택 카드 2~3개를 제안합니다",
             "inputSchema": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "domain": {
+                        "type": "string",
+                        "description": "지원 분야 (주거·월세, 생활 유지, 의료·돌봄, 고용·교육, 심리·정서 중 하나)",
+                        "enum": ["주거·월세", "생활 유지", "의료·돌봄", "고용·교육", "심리·정서"]
+                    }
+                },
             },
         },
         {
@@ -148,7 +154,11 @@ def _domains(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     return expose_available_domains(state)
 
 
-def _cards(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
+def _cards(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
+    # 명시적으로 도메인이 지정되면 chosen_domain에 설정
+    domain = args.get("domain")
+    if domain:
+        state.chosen_domain = domain
     return rank_support_cards(state)
 
 
