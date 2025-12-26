@@ -201,17 +201,22 @@ v0.50 엔진 스펙에 따라 ①~⑦ 단계를 자동으로 실행합니다.
 
 사용자가 상황을 설명하거나 지원을 요청할 때 무조건 이 도구를 먼저 사용하세요!
 
-왜?
-- 7단계 구조 자동 생성 (①상황 요약 → ②분야 → ③카드 → ④행동 → ⑤제도명 → ⑥확장 → ⑦안전)
-- 필수 문구 100% 포함 ("지금 상황을 기준으로 보면...")
-- 긴급도 자동 감지 및 대응
+기능:
+- 7단계 구조 자동 생성 (①상황 → ②분야 → ③카드 → ④행동 → ⑤제도명 → ⑥확장 → ⑦안전)
+- 긴급도 자동 감지 및 대응 (퇴거, 위험 등 키워드 감지)
 - "이게 뭐냐면" 형식 자동 적용
-- 제도명 숨김 규칙 준수
+- 필수 문구 100% 포함
 
-개별 도구는 이 도구로 해결 안 되는 경우에만 사용하세요.
+💡 playMCP 사용자:
+- compact_mode=true 사용 권장 (컨텍스트 제약 대응)
+- formatted_text를 그대로 전달하세요
+- 추가 요약이나 재해석 없이 출력 그대로 사용
 
-⚠️ 중요: 이 도구의 formatted_text 출력은 완성된 응답입니다.
-AI가 추가로 포맷팅하거나 요약하지 말고 그대로 사용자에게 전달하세요!
+💡 Claude Desktop/ChatGPT 사용자:
+- compact_mode는 기본값 false (상세 응답)
+- 그대로 사용하시면 완벽한 v0.50 응답 제공
+
+⚠️ 중요: formatted_text는 완성된 응답입니다. 수정하지 마세요!
 """,
             "inputSchema": {
                 "type": "object",
@@ -223,6 +228,10 @@ AI가 추가로 포맷팅하거나 요약하지 말고 그대로 사용자에게
                     "skip_onboarding": {
                         "type": "boolean",
                         "description": "Onboarding 메시지를 생략할지 여부 (기본값: false)",
+                    },
+                    "compact_mode": {
+                        "type": "boolean",
+                        "description": "간결 모드 활성화 여부 (기본값: false). playMCP 등 컨텍스트 제약이 있는 환경에서는 true 권장. Claude Desktop/ChatGPT는 false(기본값) 사용.",
                     }
                 },
                 "required": ["user_message"],
@@ -286,11 +295,100 @@ def _followup(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
 def _orchestrate(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     user_message = str(args.get("user_message", "") or "").strip()
     skip_onboarding = args.get("skip_onboarding", False)
+    compact_mode = args.get("compact_mode", False)  # 기본값: False (상세 모드)
     orchestrated = orchestrate_full_response(user_message, state, skip_onboarding)
+    
+    # compact_mode: playMCP 등 제약 있는 환경용
+    if compact_mode:
+        formatted_text = _format_compact(orchestrated)
+    else:
+        formatted_text = format_orchestrated_response(orchestrated)
+    
     return {
         "orchestrated": orchestrated,
-        "formatted_text": format_orchestrated_response(orchestrated)
+        "formatted_text": formatted_text,
+        "compact_mode": compact_mode
     }
+
+
+def _format_compact(orchestrated: Dict[str, Any]) -> str:
+    """playMCP 등 컨텍스트 제약이 있는 환경을 위한 간결 포맷"""
+    lines = []
+    
+    # Onboarding
+    if "onboarding" in orchestrated:
+        return orchestrated["onboarding"]
+    
+    # ① 상황 요약
+    if "step_1_situation_summary" in orchestrated:
+        step1 = orchestrated["step_1_situation_summary"]
+        lines.append(f"{step1['intro']}, {step1['summary']}")
+        lines.append("")
+    
+    # ② 분야 안내 (필수 문구 포함)
+    if "step_2_available_domains" in orchestrated:
+        step2 = orchestrated["step_2_available_domains"]
+        lines.append(step2.get("intro", "지금 상황을 기준으로 보면, 한 가지가 아니라 몇 갈래가 열려 있습니다."))
+        lines.append("")
+        
+        domains = step2.get("domains", [])
+        if domains:
+            for domain in domains[:3]:
+                lines.append(f"• {domain}")
+            lines.append("")
+    
+    # ③ 카드 (이게 뭐냐면 구조 유지)
+    if "step_3_benefit_cards" in orchestrated:
+        step3 = orchestrated["step_3_benefit_cards"]
+        cards = step3.get("cards", [])
+        
+        for i, card in enumerate(cards[:2], 1):  # 최대 2개
+            lines.append(f"【{card.get('card', '')}】")
+            lines.append("")
+            lines.append("이게 뭐냐면:")
+            lines.append(card.get('이게_뭐냐면', ''))
+            lines.append("")
+            lines.append("왜 지금 맞냐면:")
+            lines.append(card.get('왜_지금_맞냐면', ''))
+            lines.append("")
+            lines.append("지금 하실 수 있는 말:")
+            lines.append(f'"{card.get("지금_하실_수_있는_말", "")}"')
+            lines.append("")
+            lines.append("어디로:")
+            lines.append(card.get('where', ''))
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+    
+    # ④ 오늘 행동
+    if "step_4_action_steps" in orchestrated:
+        step4 = orchestrated["step_4_action_steps"]
+        actions = step4.get("actions", {})
+        
+        lines.append("【지금 바로 할 수 있는 행동】")
+        lines.append("")
+        if actions.get("today"):
+            lines.append(f"오늘: {actions['today']}")
+            lines.append("")
+        if actions.get("stuck"):
+            lines.append(f"막히면: {actions['stuck']}")
+            lines.append("")
+    
+    # ⑥ 확장 가능성 (간결하게)
+    if "step_6_expansion" in orchestrated:
+        step6 = orchestrated["step_6_expansion"]
+        expansion = step6.get("expansion_message", "")
+        if expansion:
+            lines.append(expansion.split('.')[0] + ".")  # 첫 문장만
+            lines.append("")
+    
+    # ⑦ 감정 안전
+    if "step_7_safety" in orchestrated:
+        lines.append("---")
+        lines.append("")
+        lines.append(orchestrated["step_7_safety"])
+    
+    return "\n".join(lines)
 
 
 ToolHandler = Callable[[Dict[str, Any], SessionState], Any]
