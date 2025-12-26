@@ -56,15 +56,7 @@ app.add_middleware(
 MCP_SPEC = {
     "name": "public-support-mcp",
     "version": "0.50-demo",
-    "description": """공공 지원 내비게이터 v0.50 - 판정이 아닌 선택지·행동 설계 중심
-
-⚠️ AI 사용 시 필수 규칙:
-1. 우선순위: orchestrate_full_response 도구를 먼저 사용하세요
-2. 응답 구조: ①상황 요약 → ②분야 안내 → ③카드("이게 뭐냐면") → ④행동 → ⑤제도명(트리거 시) → ⑥확장 → ⑦감정 안전
-3. 필수 문구: "지금 상황을 기준으로 보면, 한 가지가 아니라 몇 갈래가 열려 있습니다."
-4. 제도명 숨김: 기본적으로 제도명을 직접 언급하지 마세요
-5. orchestrate_full_response의 출력은 완성된 응답이므로 그대로 전달하세요
-""",
+    "description": "공공 지원 내비게이터: 판정이 아닌 선택지·행동 설계 중심의 MCP 서버 (데모용)",
     "endpoints": {
         "spec": "/mcp",
         "call": "/mcp/call",
@@ -73,7 +65,7 @@ MCP_SPEC = {
     "tools": [
         {
             "name": "normalize_user_context",
-            "description": "사용자 발화를 상황 정보로 정리합니다 (⚠️ orchestrate_full_response를 먼저 고려하세요)",
+            "description": "사용자 발화를 상황 정보로 정리합니다",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -114,7 +106,7 @@ MCP_SPEC = {
         },
         {
             "name": "rank_support_cards",
-            "description": "우선 탐색할 지원 혜택 2~3개를 제안합니다 (⚠️ orchestrate_full_response를 먼저 고려하세요)",
+            "description": "우선 탐색할 지원 혜택 2~3개를 제안합니다",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -195,21 +187,7 @@ MCP_SPEC = {
         },
         {
             "name": "orchestrate_full_response",
-            "description": """⭐ 마스터 도구 - 우선 사용 필수 ⭐
-
-v0.50 엔진 스펙에 따라 ①~⑦ 단계를 자동으로 실행합니다.
-
-사용자가 상황을 설명하거나 지원을 요청할 때 무조건 이 도구를 먼저 사용하세요!
-
-기능:
-- 7단계 구조 자동 생성 (①상황 → ②분야 → ③카드 → ④행동 → ⑤제도명 → ⑥확장 → ⑦안전)
-- 긴급도 자동 감지 및 대응 (퇴거, 위험 등 키워드 감지)
-- "이게 뭐냐면" 형식 자동 적용
-- 필수 문구 100% 포함
-
-⚠️ 중요: 이 도구의 formatted_text 출력은 완성된 응답입니다.
-AI가 추가로 포맷팅하거나 요약하지 말고 그대로 사용자에게 전달하세요!
-""",
+            "description": "v0.50 엔진 스펙에 따라 ①~⑦ 단계를 자동으로 실행하는 마스터 도구",
             "inputSchema": {
                 "type": "object",
                 "properties": {
