@@ -12,6 +12,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from schemas import BenefitCard, RichAttachment, RichResponse, Visual, ProgressBar
 from state import SESSION_STORE, SessionState
+from constants import ONBOARDING_MESSAGE
 from tools.actions import generate_action_steps
 from tools.cards import rank_support_cards
 from tools.domains import expose_available_domains
@@ -20,6 +21,10 @@ from tools.normalize import normalize_user_context
 from tools.safety import compose_safe_response
 from tools.scoring import get_profile_summary
 from tools.urgency import assess_urgency_level
+from tools.region import collect_region_context
+from tools.policy_trigger import reveal_policy_name_if_triggered
+from tools.followup import suggest_followup_options
+from tools.orchestrator import orchestrate_full_response, format_orchestrated_response
 
 
 class ToolCallRequest(BaseModel):
@@ -141,6 +146,64 @@ MCP_SPEC = {
                 "additionalProperties": False,
             },
         },
+        {
+            "name": "collect_region_context",
+            "description": "사용자의 지역 정보(시/군/구)를 부드럽게 수집합니다",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "user_input": {
+                        "type": "string",
+                        "description": "사용자가 제공한 지역 정보 (선택적)",
+                    }
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "reveal_policy_name_if_triggered",
+            "description": "제도명 공개 트리거를 확인하고, 조건 충족 시 제도명을 공개합니다",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "사용자 입력 메시지",
+                    }
+                },
+                "required": ["message"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "suggest_followup_options",
+            "description": "현재 상황을 기반으로 추가 탐색 가능한 지원 분야를 제안합니다 (⑥ 확장 가능성)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "orchestrate_full_response",
+            "description": "v0.50 엔진 스펙에 따라 ①~⑦ 단계를 자동으로 실행하는 마스터 도구",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "user_message": {
+                        "type": "string",
+                        "description": "사용자 입력 메시지",
+                    },
+                    "skip_onboarding": {
+                        "type": "boolean",
+                        "description": "Onboarding 메시지를 생략할지 여부 (기본값: false)",
+                    }
+                },
+                "required": ["user_message"],
+                "additionalProperties": False,
+            },
+        },
     ],
 }
 
@@ -181,6 +244,30 @@ def _safety(_: Dict[str, Any], state: SessionState) -> str:
     return compose_safe_response(state)
 
 
+def _region(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
+    user_input = args.get("user_input")
+    return collect_region_context(state, user_input)
+
+
+def _policy_trigger(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
+    message = str(args.get("message", "") or "").strip()
+    return reveal_policy_name_if_triggered(message, state)
+
+
+def _followup(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
+    return suggest_followup_options(state)
+
+
+def _orchestrate(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
+    user_message = str(args.get("user_message", "") or "").strip()
+    skip_onboarding = args.get("skip_onboarding", False)
+    orchestrated = orchestrate_full_response(user_message, state, skip_onboarding)
+    return {
+        "orchestrated": orchestrated,
+        "formatted_text": format_orchestrated_response(orchestrated)
+    }
+
+
 ToolHandler = Callable[[Dict[str, Any], SessionState], Any]
 
 TOOL_REGISTRY: Dict[str, ToolHandler] = {
@@ -191,6 +278,10 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
     "generate_action_steps": _actions,
     "generate_fallback_paths": _fallback,
     "compose_safe_response": _safety,
+    "collect_region_context": _region,
+    "reveal_policy_name_if_triggered": _policy_trigger,
+    "suggest_followup_options": _followup,
+    "orchestrate_full_response": _orchestrate,
 }
 
 
@@ -277,6 +368,65 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
     elif tool == "compose_safe_response":
         if isinstance(result, str):
             return [{"type": "text", "text": result}]
+    
+    elif tool == "collect_region_context":
+        if isinstance(result, dict):
+            status = result.get("status", "")
+            message = result.get("message", "")
+            if status == "collected":
+                region = result.get("region", "")
+                text = f"✅ {message}"
+            elif status == "already_collected":
+                region = result.get("region", "")
+                text = f"📍 {message}"
+            else:  # requesting
+                skip_msg = result.get("skip_message", "")
+                text = f"{message}\n\n(참고: {skip_msg})"
+            return [{"type": "text", "text": text}]
+    
+    elif tool == "reveal_policy_name_if_triggered":
+        if isinstance(result, dict):
+            triggered = result.get("triggered", False)
+            if not triggered:
+                return [{"type": "text", "text": "제도명 공개 트리거가 감지되지 않았습니다."}]
+            
+            text = f"⚠️ {result.get('warning_message', '')}\n\n"
+            
+            policy_info = result.get("policy_info")
+            if policy_info:
+                card_name = policy_info.get("card_name", "")
+                policy_name = policy_info.get("policy_name", "")
+                text += f"[{card_name}]은(는) 보통 다음과 같은 제도와 연결되는 경우가 많습니다:\n"
+                text += f"  → {policy_name}"
+            
+            return [{"type": "text", "text": text}]
+    
+    elif tool == "suggest_followup_options":
+        if isinstance(result, dict):
+            expansion_msg = result.get("expansion_message", "")
+            recommendations = result.get("recommendations", [])
+            
+            text = f"{expansion_msg}\n\n"
+            
+            if recommendations:
+                text += "예를 들면:\n"
+                for rec in recommendations:
+                    domain = rec.get("domain", "")
+                    reason = rec.get("reason", "")
+                    text += f"  • {domain}: {reason}\n"
+            
+            return [{"type": "text", "text": text}]
+    
+    elif tool == "orchestrate_full_response":
+        if isinstance(result, dict):
+            formatted_text = result.get("formatted_text", "")
+            if formatted_text:
+                return [{"type": "text", "text": formatted_text}]
+            else:
+                # 포맷팅되지 않았으면 JSON 출력
+                import json
+                text = json.dumps(result.get("orchestrated", {}), ensure_ascii=False, indent=2)
+                return [{"type": "text", "text": text}]
     
     # 기본 폴백: JSON 직렬화
     import json
