@@ -23,7 +23,8 @@ from tools.followup import suggest_followup_options
 def orchestrate_full_response(
     user_message: str,
     state: SessionState,
-    skip_onboarding: bool = False
+    skip_onboarding: bool = False,
+    client_type: str = "default"
 ) -> Dict[str, Any]:
     """
     v0.50 엔진 스펙에 따라 ①~⑦ 단계를 자동으로 실행합니다.
@@ -32,13 +33,33 @@ def orchestrate_full_response(
         user_message: 사용자 입력 메시지
         state: 세션 상태
         skip_onboarding: True면 Onboarding 메시지 생략
+        client_type: 클라이언트 타입 ("playmcp" | "chatgpt" | "default")
     
     Returns:
         전체 응답 구조 (①~⑦ 단계 포함)
     """
     response = {}
     
-    # 🔹 Onboarding (최초 1회만)
+    # 🆕 PlayMCP 전용: 사용자 메시지 분석하여 충분한 정보가 있으면 onboarding 자동 스킵
+    if state.interaction_count == 0 and not skip_onboarding and client_type == "playmcp":
+        # 구체적인 정보 키워드 확인
+        info_keywords = ["나이", "살", "세", "소득", "월세", "전세", "주거", "가족", 
+                        "부모", "혼자", "싱글", "학생", "고등학생", "대학생",
+                        "지원", "도움", "필요", "받을 수", "궁금", "알려주세요"]
+        
+        # 명확한 요청 키워드 확인
+        request_keywords = ["받을 수 있나요", "도움이 필요해요", "알려주세요", 
+                           "방법", "어떻게", "무엇", "뭐가", "궁금"]
+        
+        message_lower = user_message.lower()
+        has_info = any(kw in message_lower for kw in info_keywords)
+        has_request = any(kw in message_lower for kw in request_keywords)
+        
+        # 충분한 정보가 있거나 명확한 요청이 있으면 onboarding 스킵
+        if has_info and has_request:
+            skip_onboarding = True
+    
+    # 🔹 Onboarding (최초 1회만, 스킵 조건 확인 후)
     if state.interaction_count == 0 and not skip_onboarding:
         response["onboarding"] = ONBOARDING_MESSAGE
         # Onboarding 후에는 사용자가 입력할 때까지 대기

@@ -460,7 +460,8 @@ def _followup(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
 def _orchestrate(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     user_message = str(args.get("user_message", "") or "").strip()
     skip_onboarding = args.get("skip_onboarding", False)
-    orchestrated = orchestrate_full_response(user_message, state, skip_onboarding)
+    client_type = args.get("_client_type", "default")  # 🆕 클라이언트 타입 가져오기
+    orchestrated = orchestrate_full_response(user_message, state, skip_onboarding, client_type=client_type)
     return {
         "orchestrated": orchestrated,
         "formatted_text": format_orchestrated_response(orchestrated)
@@ -933,6 +934,9 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
         session_id, state = SESSION_STORE.get(session_id) if session_id else (None, SessionState())
         # 디버깅: 세션 ID 및 클라이언트 타입 로깅
         print(f"[DEBUG] Session ID: {session_id or 'stateless'}, Tool: {tool_name}, Client: {client_type}")
+        
+        # 🆕 arguments에 client_type 추가 (orchestrate_full_response에서 사용)
+        arguments["_client_type"] = client_type
         
         handler = TOOL_REGISTRY.get(tool_name)
         
