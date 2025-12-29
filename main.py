@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from schemas import BenefitCard, RichAttachment, RichResponse, Visual, ProgressBar
@@ -55,7 +55,7 @@ app.add_middleware(
 MCP_SPEC = {
     "name": "public-support-mcp",
     "version": "0.50",
-    "protocolVersion": "2024-11-05",
+    "protocolVersion": "2025-03-26",
     "description": "공공 지원 내비게이터: 판정이 아닌 선택지·행동 설계 중심의 MCP 서버",
     "capabilities": {
         "tools": {}
@@ -810,9 +810,134 @@ async def root_get() -> JSONResponse:
     )
 
 
+async def _process_mcp_request(payload: dict, request: Request) -> dict:
+    """MCP 요청 처리 (공통 로직)"""
+    method = payload.get("method")
+    request_id = payload.get("id")
+    
+    print(f"[DEBUG] Parsed - method: {method}, id: {request_id}")
+    
+    if method == "initialize":
+        # MCP initialize 응답
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "serverInfo": {
+                    "name": "public-support-mcp",
+                    "version": "0.50-demo"
+                },
+                "capabilities": {
+                    "tools": {
+                        "listChanged": False
+                    },
+                    "resources": {}
+                }
+            }
+        }
+    elif method == "tools/list":
+        # tools 목록 반환
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "tools": MCP_SPEC["tools"]
+            }
+        }
+    elif method == "tools/call":
+        # tool 호출 처리
+        params = payload.get("params", {})
+        tool_name = params.get("name")
+        arguments = params.get("arguments", {})
+        
+        # 🆕 Stateless 우선: 세션 ID는 클라이언트가 명시적으로 제공한 경우에만 사용
+        session_id = None
+        # 1. HTTP 헤더에서 세션 ID 추출 시도
+        session_id = request.headers.get("X-Session-ID") or request.headers.get("X-Request-ID")
+        # 2. arguments에서 세션 ID 추출 시도
+        if not session_id:
+            session_id = arguments.get("_session_id") or arguments.get("session_id")
+        # 3. 세션이 없으면 새로 생성 (Stateless 권장이지만 호환성을 위해 유지)
+        #    단, 세션이 없어도 동작하도록 최소한의 상태만 사용
+        
+        session_id, state = SESSION_STORE.get(session_id) if session_id else (None, SessionState())
+        # 디버깅: 세션 ID 로깅
+        print(f"[DEBUG] Session ID: {session_id or 'stateless'}, Tool: {tool_name}")
+        
+        handler = TOOL_REGISTRY.get(tool_name)
+        
+        if not handler:
+            # 프로토콜 오류: 알 수 없는 도구
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32602,
+                    "message": f"Unknown tool: {tool_name}"
+                }
+            }
+        
+        try:
+            result = handler(arguments, state)
+            if session_id:
+                SESSION_STORE.set(session_id, state)
+            
+            # 🆕 Rich Response 생성 (선택적)
+            use_rich = arguments.get("_use_rich_response", False)
+            if use_rich:
+                rich_response = _build_rich_response(tool_name, arguments, state, result=result)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": rich_response.content}],
+                        "attachments": [att.model_dump() for att in rich_response.attachments],
+                        "metadata": rich_response.metadata,
+                        "isError": False,
+                    }
+                }
+            else:
+                response_content = _build_content(tool_name, arguments, result=result)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": response_content,
+                        "isError": False,
+                    }
+                }
+                # 세션 ID가 있으면 메타데이터에 포함 (선택적)
+                if session_id:
+                    response["result"]["_session_id"] = session_id
+                return response
+        except Exception as exc:
+            # 도구 실행 오류: isError 플래그와 함께 반환
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "content": [{"type": "text", "text": f"도구 실행 중 오류: {str(exc)}"}],
+                    "isError": True,
+                }
+            }
+    
+    # method가 없거나 알 수 없는 요청
+    return {
+        "mcp": True,
+        "name": "public-support-mcp",
+        "version": "0.50",
+        "endpoints": {"spec": "/mcp", "call": "/mcp/call"},
+    }
+
+
 @app.post("/")
-async def root_post(request: Request) -> JSONResponse:
-    """POST: JSON-RPC 2.0 기반 MCP 프로토콜 처리"""
+async def root_post(request: Request):
+    """POST: JSON-RPC 2.0 기반 MCP 프로토콜 처리 (Streamable HTTP 지원)"""
+    
+    # Streamable HTTP (SSE) 지원 확인
+    accept_header = request.headers.get("Accept", "")
+    use_streaming = "text/event-stream" in accept_header
     
     # POST body 읽기
     try:
@@ -820,7 +945,7 @@ async def root_post(request: Request) -> JSONResponse:
         body_str = body.decode('utf-8') if body else "{}"
         
         # 디버깅: 실제 요청 내용 로깅
-        print(f"[DEBUG] POST / received:")
+        print(f"[DEBUG] POST / received (streaming: {use_streaming}):")
         print(f"  Headers: {dict(request.headers)}")
         print(f"  Body: {body_str[:500]}")  # 처음 500자만
         
@@ -832,135 +957,35 @@ async def root_post(request: Request) -> JSONResponse:
         print(f"[ERROR] Body parsing failed: {e}")
         payload = {}
     
-    # JSON-RPC method 처리
+    # 요청 처리
     if payload and isinstance(payload, dict):
-        method = payload.get("method")
-        request_id = payload.get("id")
-        
-        print(f"[DEBUG] Parsed - method: {method}, id: {request_id}")
-        
-        if method == "initialize":
-            # MCP initialize 응답
-            return JSONResponse({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "serverInfo": {
-                        "name": "public-support-mcp",
-                        "version": "0.50-demo"
-                    },
-                    "capabilities": {
-                        "tools": {
-                            "listChanged": False
-                        },
-                        "resources": {}
-                    }
-                }
-            })
-        elif method == "tools/list":
-            # tools 목록 반환
-            return JSONResponse({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "tools": MCP_SPEC["tools"]
-                }
-            })
-        elif method == "tools/call":
-            # tool 호출 처리 (기존 /mcp/call 로직 재사용)
-            params = payload.get("params", {})
-            tool_name = params.get("name")
-            arguments = params.get("arguments", {})
-            
-            # 🆕 세션 ID 추출: 헤더 → arguments → IP+User-Agent → Request ID 순서로 시도
-            session_id = None
-            # 1. HTTP 헤더에서 세션 ID 추출 시도
-            session_id = request.headers.get("X-Session-ID") or request.headers.get("X-Request-ID")
-            # 2. arguments에서 세션 ID 추출 시도
-            if not session_id:
-                session_id = arguments.get("_session_id") or arguments.get("session_id")
-            # 3. IP + User-Agent 조합으로 세션 추적 (같은 사용자의 연속된 요청)
-            if not session_id:
-                client_ip = request.client.host if request.client else "unknown"
-                user_agent = request.headers.get("User-Agent", "unknown")
-                # IP와 User-Agent의 해시를 사용하여 세션 키 생성
-                import hashlib
-                session_key = f"{client_ip}_{user_agent}"
-                session_id = f"mcp_{hashlib.md5(session_key.encode()).hexdigest()[:16]}"
-            # 4. Request ID를 세션 키로 사용 (최후의 수단)
-            if not session_id and request_id:
-                session_id = f"mcp_req_{request_id}"
-            
-            session_id, state = SESSION_STORE.get(session_id)
-            # 디버깅: 세션 ID 로깅
-            print(f"[DEBUG] Session ID: {session_id}, Tool: {tool_name}, Shown Cards: {state.shown_cards}")
-            
-            handler = TOOL_REGISTRY.get(tool_name)
-            
-            if not handler:
-                # 프로토콜 오류: 알 수 없는 도구
-                return JSONResponse({
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {
-                        "code": -32602,
-                        "message": f"Unknown tool: {tool_name}"
-                    }
-                })
-            
-            if handler:
-                try:
-                    result = handler(arguments, state)
-                    SESSION_STORE.set(session_id, state)
-                    
-                    # 🆕 Rich Response 생성 (선택적)
-                    use_rich = arguments.get("_use_rich_response", False)
-                    if use_rich:
-                        rich_response = _build_rich_response(tool_name, arguments, state, result=result)
-                        return JSONResponse({
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": {
-                                "content": [{"type": "text", "text": rich_response.content}],
-                                "attachments": [att.model_dump() for att in rich_response.attachments],
-                                "metadata": rich_response.metadata,
-                                "isError": False,
-                            }
-                        })
-                    else:
-                        response_content = _build_content(tool_name, arguments, result=result)
-                        # 🆕 세션 ID를 메타데이터에 포함 (다음 호출에서 사용 가능)
-                        return JSONResponse({
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": {
-                                "content": response_content,
-                                "isError": False,
-                                # 세션 ID를 메타데이터로 포함 (PlayMCP Gateway가 다음 호출에 전달할 수 있도록)
-                                "_session_id": session_id,
-                            }
-                        })
-                except Exception as exc:
-                    # 도구 실행 오류: isError 플래그와 함께 반환
-                    return JSONResponse({
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {
-                            "content": [{"type": "text", "text": f"도구 실행 중 오류: {str(exc)}"}],
-                            "isError": True,
-                        }
-                    })
-    
-    # method가 없거나 알 수 없는 요청: 기본 서버 정보 반환
-    return JSONResponse(
-        {
+        response_data = await _process_mcp_request(payload, request)
+    else:
+        response_data = {
             "mcp": True,
             "name": "public-support-mcp",
             "version": "0.50",
             "endpoints": {"spec": "/mcp", "call": "/mcp/call"},
         }
-    )
+    
+    # Streamable HTTP (SSE) 응답
+    if use_streaming:
+        async def generate_sse():
+            # SSE 형식으로 응답 전송
+            response_json = json.dumps(response_data, ensure_ascii=False)
+            yield f"data: {response_json}\n\n"
+        
+        return StreamingResponse(
+            generate_sse(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
+    else:
+        # 일반 JSON 응답
+        return JSONResponse(response_data)
 
 
 @app.post("/mcp/call")
@@ -973,7 +998,12 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(arguments, dict):
         arguments = {}
 
-    session_id, state = SESSION_STORE.get(session_id)
+    # 🆕 Stateless 우선: 세션 ID가 제공된 경우에만 사용
+    if session_id:
+        session_id, state = SESSION_STORE.get(session_id)
+    else:
+        state = SessionState()
+    
     handler = TOOL_REGISTRY.get(tool)
 
     if not handler:
@@ -991,7 +1021,9 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
     if handler:
         try:
             result = handler(arguments, state)
-            SESSION_STORE.set(session_id, state)
+            # 세션이 있으면 저장 (Stateless 권장이지만 호환성을 위해 유지)
+            if session_id:
+                SESSION_STORE.set(session_id, state)
             
             # 🆕 Rich Response 생성
             if use_rich:
