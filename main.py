@@ -637,6 +637,16 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
     
     elif tool == "orchestrate_full_response":
         if isinstance(result, dict):
+            # 🆕 ChatGPT 전용: 리다이렉트 메시지 처리
+            if "_redirect_to_rank_cards" in result:
+                redirect_info = result["_redirect_to_rank_cards"]
+                return [{"type": "text", "text": redirect_info["message"]}]
+            
+            # 🆕 ChatGPT 전용: 감정 발화만 있는 경우
+            if "_emotion_only" in result:
+                emotion_info = result["_emotion_only"]
+                return [{"type": "text", "text": emotion_info["message"]}]
+            
             orchestrated = result.get("orchestrated", {})
             
             # Onboarding이 있으면 바로 반환

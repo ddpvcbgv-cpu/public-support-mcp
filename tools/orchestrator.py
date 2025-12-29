@@ -10,7 +10,7 @@ from constants import REQUIRED_PHRASES, ONBOARDING_MESSAGE
 
 from tools.normalize import normalize_user_context
 from tools.urgency import assess_urgency_level
-from tools.domains import expose_available_domains
+from tools.domains import expose_available_domains, DOMAIN_HINTS
 from tools.cards import rank_support_cards
 from tools.actions import generate_action_steps
 from tools.fallback import generate_fallback_paths
@@ -18,6 +18,154 @@ from tools.safety import compose_safe_response
 from tools.region import collect_region_context
 from tools.policy_trigger import reveal_policy_name_if_triggered
 from tools.followup import suggest_followup_options
+
+
+def _should_unlock_domain(user_message: str, state: SessionState) -> bool:
+    """
+    ChatGPT 전용: domain_lock을 해제해야 하는지 판단
+    
+    Returns:
+        True: unlock (orchestrate 허용)
+        False: lock 유지 (rank_support_cards 사용 권장)
+    """
+    message_lower = user_message.lower()
+    current_domain = state.chosen_domain
+    
+    if not current_domain:
+        return True  # lock이 없으면 항상 허용
+    
+    # 1. 명시적 전환 요청 감지
+    unlock_keywords = [
+        "다른 분야", "다른 지원", "추가로", "또 다른",
+        "다른 것", "다른 건", "다른 거", "다른 게",
+        "이것도", "이것도 궁금", "이것도 알고 싶",
+        "전환", "바꾸고 싶", "변경"
+    ]
+    if any(kw in message_lower for kw in unlock_keywords):
+        return True
+    
+    # 2. 새로운 도메인 키워드 감지
+    # 현재 도메인의 키워드 제외
+    current_hints = DOMAIN_HINTS.get(current_domain, [])
+    message_without_current = message_lower
+    for hint in current_hints:
+        message_without_current = message_without_current.replace(hint, "")
+    
+    # 다른 도메인 키워드가 있는지 확인
+    other_domain_detected = False
+    for domain, hints in DOMAIN_HINTS.items():
+        if domain != current_domain:
+            if any(hint in message_without_current for hint in hints):
+                other_domain_detected = True
+                break
+    
+    # 3. 새로운 상황 설명 (완전히 다른 맥락)
+    # ⚠️ 보완: "그런데", "그리고", "또한" 단독으로는 unlock하지 않음
+    new_situation_keywords = [
+        "이제", "이번엔", "이번에는",
+        "새로운", "다른 문제", "다른 상황"
+    ]
+    
+    # "그런데", "그리고", "또한"은 다른 도메인 키워드와 함께 있을 때만 unlock
+    weak_connectors = ["그런데", "그리고", "또한"]
+    has_weak_connector = any(kw in message_lower for kw in weak_connectors)
+    
+    if has_weak_connector:
+        # 다른 도메인 키워드와 함께 있으면 unlock
+        if other_domain_detected:
+            return True
+        # 단독으로는 unlock하지 않음 (같은 도메인 심화로 간주)
+        return False
+    
+    # 강한 새로운 상황 키워드 + 도메인 키워드
+    if any(kw in message_lower for kw in new_situation_keywords):
+        if other_domain_detected:
+            return True
+    
+    return False
+
+
+def _is_emotion_only(user_message: str, state: SessionState) -> bool:
+    """
+    ChatGPT 전용: 감정 발화만 있는지 판단 (상태 변경 없음)
+    
+    ⚠️ 보완: 질문형 어미가 있으면 요청으로 간주
+    
+    Returns:
+        True: 감정 표현만 (상태 유지)
+        False: 구체적 요청 포함 (새로운 요청)
+    """
+    message_lower = user_message.lower()
+    
+    # 감정 키워드
+    emotion_keywords = [
+        "힘들어", "힘들다", "힘듦", "힘들",
+        "무서워", "무섭", "불안해", "불안",
+        "걱정돼", "걱정", "두려워", "두려움",
+        "슬퍼", "슬프", "우울해", "우울",
+        "답답해", "답답", "막막해", "막막",
+        "너무", "정말", "진짜", "완전히"
+    ]
+    
+    # 구체적 요청 키워드
+    request_keywords = [
+        "필요", "받고 싶", "알고 싶", "궁금",
+        "도움", "지원", "알려줘", "말해줘",
+        "방법", "어떻게", "무엇", "뭐가",
+        "신청", "연결", "상담", "문의"
+    ]
+    
+    # 도메인 키워드
+    has_domain_keyword = False
+    for hints in DOMAIN_HINTS.values():
+        if any(hint in message_lower for hint in hints):
+            has_domain_keyword = True
+            break
+    
+    has_emotion = any(kw in message_lower for kw in emotion_keywords)
+    has_request = any(kw in message_lower for kw in request_keywords)
+    
+    # 🆕 보완: 감정 + 질문형 어미는 요청으로 간주
+    question_markers = ["어떻게", "뭐", "뭘", "할 수", "해야", "해야 할지", "해야 할까"]
+    has_question = any(q in message_lower for q in question_markers)
+    
+    if has_emotion and has_question:
+        # "막막해요... 어떻게 해야 할지 모르겠어요" → 요청으로 간주
+        return False
+    
+    # 감정만 있고 요청/도메인/질문 키워드가 없으면 감정 발화로 판단
+    if has_emotion and not has_request and not has_domain_keyword and not has_question:
+        return True
+    
+    return False
+
+
+def _should_allow_reorchestrate(user_message: str, state: SessionState) -> bool:
+    """
+    ChatGPT 전용: orchestrate 재호출을 허용해야 하는지 판단
+    
+    Returns:
+        True: 재호출 허용
+        False: 재호출 금지 (rank_support_cards 등 다른 도구 사용)
+    """
+    # 1. 첫 호출은 항상 허용
+    if state.interaction_count == 0:
+        return True
+    
+    # 2. domain_lock이 없으면 허용
+    if not state.chosen_domain:
+        return True
+    
+    # 3. unlock 조건 충족 시 허용
+    if _should_unlock_domain(user_message, state):
+        return True
+    
+    # 4. 감정 발화만 있으면 상태 유지 (재호출 불필요)
+    if _is_emotion_only(user_message, state):
+        return False
+    
+    # 5. 그 외에는 재호출 금지 (rank_support_cards 사용)
+    return False
 
 
 def orchestrate_full_response(
@@ -39,6 +187,36 @@ def orchestrate_full_response(
         전체 응답 구조 (①~⑦ 단계 포함)
     """
     response = {}
+    
+    # 🆕 ChatGPT 전용: domain_lock 및 orchestrate 1회성 제한
+    if client_type == "chatgpt":
+        # 1. orchestrate 재호출 허용 여부 체크
+        if not _should_allow_reorchestrate(user_message, state):
+            # 재호출 금지: rank_support_cards 사용 권장 메시지 반환
+            current_domain = state.chosen_domain or "현재 선택한 분야"
+            
+            # 🆕 보완: UX 개선된 메시지 (톤 조정)
+            response["_redirect_to_rank_cards"] = {
+                "message": (
+                    f"이미 {current_domain} 쪽으로 이야기를 나누고 있어서, "
+                    f"이제는 해당 지원을 더 자세히 보는 게 좋아 보여요. "
+                    f"'rank_support_cards' 도구를 사용해주세요."
+                ),
+                "domain": state.chosen_domain
+            }
+            return response
+        
+        # 2. 감정 발화만 있는 경우 상태 유지 (기존 응답 유지)
+        if _is_emotion_only(user_message, state) and state.interaction_count > 0:
+            # 기존 상태 유지 메시지 반환
+            response["_emotion_only"] = {
+                "message": (
+                    "감정을 표현해주셔서 감사합니다. "
+                    "구체적인 지원이 필요하시면 어떤 분야인지 말씀해주세요."
+                ),
+                "maintain_state": True
+            }
+            return response
     
     # 🆕 PlayMCP 전용: 사용자 메시지 분석하여 충분한 정보가 있으면 onboarding 자동 스킵
     if state.interaction_count == 0 and not skip_onboarding and client_type == "playmcp":
