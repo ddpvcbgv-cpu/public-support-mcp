@@ -1067,10 +1067,67 @@ def get_openapi_spec() -> Dict[str, Any]:
             }
         ],
         "paths": {
+            "/orchestrate_full_response": {
+                "post": {
+                    "summary": "공공 지원 상담 (메인 진입 Tool)",
+                    "description": """🎯 이 MCP의 메인 진입 Tool입니다. ChatGPT에서 사용자가 공공 지원/혜택/도움 요청을 할 경우 가장 먼저 호출되어야 하는 대표 Tool입니다.
+
+이 Tool은 단독 호출을 전제로 설계되었으며, 사용자 요청에 직접 응답하는 공개 Tool입니다.
+
+한국 공공 지원(복지, 주거, 의료, 고용 등) 탐색을 위한 통합 응답 생성 도구.
+
+기능: ①상황 요약 → ②분야 안내 → ③혜택 카드 2-3개 → ④행동 단계 → ⑤제도명(트리거 시) → ⑥확장 가능성 → ⑦감정 안전 메시지""",
+                    "operationId": "orchestrate_full_response",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "user_message": {
+                                            "type": "string",
+                                            "description": "사용자 입력 메시지"
+                                        },
+                                        "skip_onboarding": {
+                                            "type": "boolean",
+                                            "description": "Onboarding 메시지를 생략할지 여부 (기본값: false)",
+                                            "default": False
+                                        }
+                                    },
+                                    "required": ["user_message"]
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "성공",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "orchestrated": {
+                                                "type": "object",
+                                                "description": "구조화된 상담 응답"
+                                            },
+                                            "formatted_text": {
+                                                "type": "string",
+                                                "description": "포맷팅된 텍스트 응답"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             "/chat": {
                 "post": {
-                    "summary": "공공 지원 상담",
-                    "description": "사용자의 상황을 분석하고 적절한 지원 옵션을 제안합니다.",
+                    "summary": "공공 지원 상담 (레거시 엔드포인트)",
+                    "description": "사용자의 상황을 분석하고 적절한 지원 옵션을 제안합니다. (내부적으로 orchestrate_full_response 사용)",
                     "operationId": "chat",
                     "requestBody": {
                         "required": True,
@@ -1117,6 +1174,35 @@ def get_openapi_spec() -> Dict[str, Any]:
 async def openapi_spec():
     """ChatGPT Actions용 OpenAPI 스펙"""
     return JSONResponse(get_openapi_spec())
+
+
+@app.post("/orchestrate_full_response")
+async def orchestrate_full_response_endpoint(request: Request):
+    """ChatGPT Actions용 메인 진입 Tool 엔드포인트"""
+    try:
+        body = await request.json()
+        user_message = body.get("user_message", "")
+        skip_onboarding = body.get("skip_onboarding", False)
+        
+        if not user_message:
+            return JSONResponse({
+                "error": "user_message 필드가 필요합니다"
+            }, status_code=400)
+        
+        # orchestrate_full_response 사용
+        session_id, state = SESSION_STORE.get(None)
+        result = orchestrate_full_response(user_message, state, skip_onboarding=skip_onboarding)
+        formatted = format_orchestrated_response(result)
+        
+        return JSONResponse({
+            "orchestrated": result.get("orchestrated", {}),
+            "formatted_text": formatted
+        })
+    except Exception as e:
+        print(f"[ERROR] /orchestrate_full_response endpoint error: {e}")
+        return JSONResponse({
+            "error": str(e)
+        }, status_code=500)
 
 
 @app.post("/chat")
