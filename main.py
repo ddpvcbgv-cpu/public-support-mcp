@@ -1042,3 +1042,102 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
             }
             return JSONResponse(response)
 
+
+# ==========================================
+# ChatGPT Actions용 OpenAPI 엔드포인트
+# ==========================================
+
+def get_openapi_spec() -> Dict[str, Any]:
+    """ChatGPT Actions용 OpenAPI 3.0 스펙 생성"""
+    return {
+        "openapi": "3.0.0",
+        "info": {
+            "title": "Public Support Navigator",
+            "description": "공공 지원 내비게이터: 판정이 아닌 선택지·행동 설계 중심의 MCP 서버",
+            "version": "0.50"
+        },
+        "servers": [
+            {
+                "url": "https://public-support-mcp.onrender.com",
+                "description": "Production server"
+            }
+        ],
+        "paths": {
+            "/chat": {
+                "post": {
+                    "summary": "공공 지원 상담",
+                    "description": "사용자의 상황을 분석하고 적절한 지원 옵션을 제안합니다.",
+                    "operationId": "chat",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "message": {
+                                            "type": "string",
+                                            "description": "사용자 메시지"
+                                        }
+                                    },
+                                    "required": ["message"]
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "성공",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "response": {
+                                                "type": "string",
+                                                "description": "공공 지원 상담 응답"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+@app.get("/openapi.json")
+async def openapi_spec():
+    """ChatGPT Actions용 OpenAPI 스펙"""
+    return JSONResponse(get_openapi_spec())
+
+
+@app.post("/chat")
+async def chat_endpoint(request: Request):
+    """ChatGPT Actions 호환 엔드포인트"""
+    try:
+        body = await request.json()
+        user_message = body.get("message", "")
+        
+        if not user_message:
+            return JSONResponse({
+                "error": "message 필드가 필요합니다"
+            }, status_code=400)
+        
+        # orchestrate_full_response 사용
+        session_id, state = SESSION_STORE.get(None)
+        result = orchestrate_full_response(user_message, state, skip_onboarding=False)
+        formatted = format_orchestrated_response(result)
+        
+        return JSONResponse({
+            "response": formatted
+        })
+    except Exception as e:
+        print(f"[ERROR] /chat endpoint error: {e}")
+        return JSONResponse({
+            "error": str(e)
+        }, status_code=500)
+
