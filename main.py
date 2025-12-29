@@ -467,8 +467,16 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
 }
 
 
-def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = None, error: str | None = None) -> List[Dict[str, str]]:
-    """도구 실행 결과를 AI가 읽을 수 있는 텍스트로 변환 (레거시 호환)"""
+def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = None, error: str | None = None, client_type: str = "default") -> List[Dict[str, str]]:
+    """도구 실행 결과를 AI가 읽을 수 있는 텍스트로 변환 (레거시 호환)
+    
+    Args:
+        tool: 도구 이름
+        arguments: 도구 인자
+        result: 도구 실행 결과
+        error: 에러 메시지
+        client_type: 클라이언트 타입 ("playmcp" | "chatgpt" | "default")
+    """
     if error:
         return [{"type": "text", "text": f"도구 실행 중 오류: {error}"}]
     
@@ -606,14 +614,78 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
     
     elif tool == "orchestrate_full_response":
         if isinstance(result, dict):
+            orchestrated = result.get("orchestrated", {})
+            
+            # Onboarding이 있으면 바로 반환
+            if "onboarding" in orchestrated:
+                return [{"type": "text", "text": orchestrated["onboarding"]}]
+            
+            # 🆕 PlayMCP 전용: 간결한 카드 중심 포맷
+            if client_type == "playmcp":
+                text_parts = []
+                
+                # ① 상황 요약 (간략히)
+                if "step_1_situation_summary" in orchestrated:
+                    step1 = orchestrated["step_1_situation_summary"]
+                    summary = step1.get("summary", "")
+                    if summary:
+                        text_parts.append(f"📋 {summary}")
+                
+                # ② 분야 안내
+                if "step_2_available_domains" in orchestrated:
+                    step2 = orchestrated["step_2_available_domains"]
+                    domains = step2.get("domains", [])
+                    if domains:
+                        text_parts.append(f"\n✅ 열려 있는 지원 분야: {', '.join(domains)}")
+                
+                # ③ 혜택 카드 (핵심!)
+                if "step_3_benefit_cards" in orchestrated:
+                    cards_data = orchestrated["step_3_benefit_cards"]
+                    domain = cards_data.get("domain", "")
+                    cards = cards_data.get("cards", [])
+                    
+                    if cards:
+                        text_parts.append(f"\n🎯 {domain} 분야에서 {len(cards)}개의 지원 옵션을 찾았습니다:\n")
+                        
+                        for i, card in enumerate(cards, 1):
+                            card_name = card.get("card", "")
+                            description = card.get("이게_뭐냐면", "")
+                            where = card.get("where", "")
+                            
+                            text_parts.append(f"\n【{i}. {card_name}】")
+                            if description:
+                                text_parts.append(f"→ {description}")
+                            if where:
+                                # 이모티콘 제거하고 간결하게
+                                where_clean = where.replace("📞", "").strip()
+                                text_parts.append(f"→ 어디로: {where_clean}")
+                    else:
+                        # 🆕 카드가 없을 때 폴백 (긴급도 Level 1, 정보 부족 등)
+                        text_parts.append(
+                            "\n⚠️ 지금은 즉시 확인이 필요한 상황입니다. "
+                            "아래 행동부터 먼저 해주세요."
+                        )
+                
+                # ④ 행동 단계 (간략히)
+                if "step_4_action_steps" in orchestrated:
+                    actions = orchestrated["step_4_action_steps"].get("actions", {})
+                    if actions.get("today"):
+                        text_parts.append(f"\n🎯 오늘 할 일: {actions['today']}")
+                    if actions.get("tomorrow"):
+                        text_parts.append(f"📅 내일까지: {actions['tomorrow']}")
+                
+                if text_parts:
+                    return [{"type": "text", "text": "\n".join(text_parts)}]
+            
+            # ChatGPT용: 기존 포맷팅된 텍스트 사용 (변경 없음)
             formatted_text = result.get("formatted_text", "")
             if formatted_text:
                 return [{"type": "text", "text": formatted_text}]
-            else:
-                # 포맷팅되지 않았으면 JSON 출력
-                import json
-                text = json.dumps(result.get("orchestrated", {}), ensure_ascii=False, indent=2)
-                return [{"type": "text", "text": text}]
+            
+            # 폴백: JSON 출력
+            import json
+            text = json.dumps(orchestrated, ensure_ascii=False, indent=2)
+            return [{"type": "text", "text": text}]
     
     # 기본 폴백: JSON 직렬화
     import json
@@ -828,6 +900,9 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
         
+        # 🆕 client_type 판단: Header 우선, 엔드포인트 기본값
+        client_type = request.headers.get("X-MCP-Client", "playmcp")  # 기본값: playmcp
+        
         # 🆕 Stateless 우선: 세션 ID는 클라이언트가 명시적으로 제공한 경우에만 사용
         session_id = None
         # 1. HTTP 헤더에서 세션 ID 추출 시도
@@ -839,8 +914,8 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
         #    단, 세션이 없어도 동작하도록 최소한의 상태만 사용
         
         session_id, state = SESSION_STORE.get(session_id) if session_id else (None, SessionState())
-        # 디버깅: 세션 ID 로깅
-        print(f"[DEBUG] Session ID: {session_id or 'stateless'}, Tool: {tool_name}")
+        # 디버깅: 세션 ID 및 클라이언트 타입 로깅
+        print(f"[DEBUG] Session ID: {session_id or 'stateless'}, Tool: {tool_name}, Client: {client_type}")
         
         handler = TOOL_REGISTRY.get(tool_name)
         
@@ -875,7 +950,13 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
                     }
                 }
             else:
-                response_content = _build_content(tool_name, arguments, result=result)
+                # 🆕 client_type 전달
+                response_content = _build_content(
+                    tool_name, 
+                    arguments, 
+                    result=result,
+                    client_type=client_type  # 🆕 PlayMCP 전용 포맷
+                )
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
