@@ -8,7 +8,6 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sse_starlette.sse import EventSourceResponse
 
 from schemas import BenefitCard, RichAttachment, RichResponse, Visual, ProgressBar
 from state import SESSION_STORE, SessionState
@@ -55,17 +54,36 @@ app.add_middleware(
 
 MCP_SPEC = {
     "name": "public-support-mcp",
-    "version": "0.50-demo",
-    "description": "공공 지원 내비게이터: 판정이 아닌 선택지·행동 설계 중심의 MCP 서버 (데모용)",
+    "version": "0.50",
+    "protocolVersion": "2024-11-05",
+    "description": "공공 지원 내비게이터: 판정이 아닌 선택지·행동 설계 중심의 MCP 서버",
+    "capabilities": {
+        "tools": {}
+    },
     "endpoints": {
         "spec": "/mcp",
-        "call": "/mcp/call",
-        "sse": "/sse",
+        "call": "/mcp/call"
     },
     "tools": [
         {
             "name": "normalize_user_context",
-            "description": "사용자 발화를 상황 정보로 정리합니다",
+            "description": """한국 공공 지원 관련 사용자 발화를 구조화된 상황 정보로 정리.
+
+🎯 호출 시점:
+- orchestrate_full_response 대신 상황 분석만 먼저 필요할 때
+- 사용자가 상황 설명은 했지만 아직 지원 요청은 하지 않았을 때
+- 복잡한 상황을 단계적으로 분해하고 싶을 때
+
+📝 예시:
+✅ "30대이고 서울에 살아요. 3년째 백수고 혼자 살아요" (상황만, 요청 없음)
+✅ "결혼 준비 중인데 천안 두정동에 살고 있어요" (배경 정보만)
+
+❌ 호출하지 마세요:
+- 이미 orchestrate_full_response를 호출한 경우 (중복 방지)
+- 공공 지원과 무관한 일상 대화
+- 단순 인사나 확인 응답
+
+출력: summary(상황 요약), keywords(키워드 리스트), missing_info(부족한 정보)""",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -79,7 +97,23 @@ MCP_SPEC = {
         },
         {
             "name": "assess_urgency_level",
-            "description": "문맥을 기반으로 긴급도 레벨(1~3)을 추정합니다",
+            "description": """공공 지원 상황의 긴급도(1~3) 평가. 내부 로직용, 단독 호출 거의 불필요.
+
+긴급도 기준:
+- Level 1 (매우 긴급): 퇴거, 위험, 응급, 폭력 등 즉각 대응 필요
+- Level 2 (긴급): 이번 달, 곧, 급한 등 단기 압박
+- Level 3 (보통): 일반적인 지원 탐색 상황
+
+🎯 호출 시점:
+- orchestrate_full_response가 자동으로 처리함
+- 개별적으로 긴급도만 판단할 때 (매우 드묾)
+
+❌ 대부분의 경우:
+- 단독 호출 불필요
+- orchestrate_full_response가 자동 감지 및 대응
+- 긴급도에 따라 카드 개수와 안전 메시지 자동 조정됨
+
+출력: urgency_level(1, 2, 3)""",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -97,7 +131,21 @@ MCP_SPEC = {
         },
         {
             "name": "expose_available_domains",
-            "description": "현재 상황에서 열려 있는 지원 분야(주거·월세, 생활 유지, 의료·돌봄, 고용·교육, 심리·정서)를 제안합니다",
+            "description": """사용자 상황에서 열려 있는 지원 분야 목록 제공 (한국 공공 지원).
+
+분야: 주거·월세 | 생활 유지 | 의료·돌봄 | 고용·교육 | 심리·정서
+
+🎯 호출 시점:
+- orchestrate_full_response가 ②단계에서 자동 포함
+- 개별적으로 분야 목록만 보여줄 때 (드묾)
+- "어떤 분야가 있어요?" 같은 분야 목록 질문
+
+❌ 대부분의 경우:
+- 단독 호출 불필요
+- orchestrate_full_response 사용 권장
+- 구체적인 상담은 orchestrate로 진행
+
+출력: domains(분야 리스트), smart_suggestion(AI 추천 분야)""",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -106,7 +154,27 @@ MCP_SPEC = {
         },
         {
             "name": "rank_support_cards",
-            "description": "우선 탐색할 지원 혜택 2~3개를 제안합니다",
+            "description": """특정 지원 분야의 혜택 카드 2-3개 제공 (한국 공공 지원).
+
+분야: 주거·월세 | 생활 유지 | 의료·돌봄 | 고용·교육 | 심리·정서
+
+🎯 호출 시점:
+- 사용자가 원하는 지원 분야를 이미 명시했을 때
+- "더 자세히", "구체적으로", "다른 옵션은?" 요청 시
+- 특정 분야에 대한 추가 정보 원할 때
+
+📝 예시:
+✅ "주거 쪽으로 더 자세히 알고 싶어요" → domain: "주거·월세"
+✅ "취업 관련 지원이 궁금해요" → domain: "고용·교육"
+✅ "의료비 부담이 커서 의료 쪽으로" → domain: "의료·돌봄"
+✅ "생활비 지원 다른 것도 있어요?" → domain: "생활 유지"
+
+❌ 호출하지 마세요:
+- 사용자가 아직 분야를 선택하지 않았을 때
+- 처음 상담 시작할 때 (orchestrate_full_response 사용)
+- 분야가 불명확하거나 여러 개일 때
+
+출력: 각 카드의 "이게 뭐냐면", "왜 지금 맞냐면", "지금 하실 수 있는 말", "어디로", "막히면" 정보""",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -121,7 +189,26 @@ MCP_SPEC = {
         },
         {
             "name": "generate_action_steps",
-            "description": "오늘/내일/막히면의 행동 단계를 제공합니다",
+            "description": """선택한 지원에 대한 실행 계획 제공 (오늘/내일/막히면 3단계).
+
+🎯 호출 시점:
+- "구체적으로 어떻게 해요?", "방법 알려주세요" 요청
+- "오늘 바로 할 수 있는 게 뭐예요?" 질문
+- 카드 선택 후 실행 방법이 궁금할 때
+- "시작하려면 어떻게 하나요?" 같은 실행 의도
+
+📝 예시:
+✅ "구체적으로 어떻게 시작하나요?"
+✅ "오늘 바로 할 수 있는 일이 뭐예요?"
+✅ "실행 계획을 알려주세요"
+✅ "당장 뭐부터 하면 돼요?"
+
+❌ 호출하지 마세요:
+- 아직 카드를 선택하지 않았을 때
+- orchestrate_full_response가 이미 행동 단계를 포함한 경우
+- 단순 정보 질문 단계
+
+출력: today(오늘 할 일), tomorrow(내일까지), fallback(막히면 대안)""",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -130,7 +217,26 @@ MCP_SPEC = {
         },
         {
             "name": "generate_fallback_paths",
-            "description": "전화/서류/자격에서 막힐 때의 대안 경로를 제시합니다",
+            "description": """전화 연결 실패, 서류 부족, 자격 애매할 때의 대안 경로 제시 (한국 공공 지원).
+
+🎯 호출 시점:
+- "전화가 안 돼요", "연결이 안 되는데요" 호소
+- "서류가 없어요", "준비가 어려워요" 어려움 표현
+- "자격이 안 될 것 같은데", "조건이 애매한데" 걱정
+- 실행 중 실제 문제 발생했을 때
+
+📝 예시:
+✅ "전화 연결이 안 되는데 어떻게 해요?"
+✅ "서류 준비가 너무 어려워요"
+✅ "자격이 애매한데 다른 방법은?"
+✅ "담당자가 안 받는데요"
+
+❌ 호출하지 마세요:
+- 아직 시도하지 않았을 때
+- 문제 상황이 실제로 발생하지 않았을 때
+- 단순 걱정이나 예상 (실제 막힘 발생 후 호출)
+
+출력: 전화/서류/자격 각 상황별 구체적인 대안 경로""",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -139,7 +245,24 @@ MCP_SPEC = {
         },
         {
             "name": "compose_safe_response",
-            "description": "마지막에 붙는 감정 안전 문장을 반환합니다",
+            "description": """응답 마지막에 붙는 감정 안전 메시지 생성 (한국 공공 지원).
+
+🎯 호출 시점:
+- orchestrate_full_response가 ⑦단계에서 자동으로 포함함
+- 개별적으로 감정 지원 메시지만 필요할 때 (매우 드묾)
+- 사용자가 불안이나 압박을 표현했을 때
+
+📝 예시 (드묾):
+✅ "무서워요"
+✅ "너무 불안해요"
+✅ "걱정돼요"
+
+❌ 대부분의 경우:
+- 단독 호출 불필요
+- orchestrate_full_response가 자동으로 처리
+- 일반적인 상담에서는 호출하지 마세요
+
+출력: 상황에 맞는 감정 안전 메시지 (비판단적, 지지적 톤)""",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -148,7 +271,25 @@ MCP_SPEC = {
         },
         {
             "name": "collect_region_context",
-            "description": "사용자의 지역 정보(시/군/구)를 부드럽게 수집합니다",
+            "description": """한국 지역(시/도/군/구) 정보를 수집하여 지역별 지원 안내에 활용.
+
+🎯 호출 시점:
+- 사용자가 지역 정보를 명시적으로 제공했을 때
+- 지역별 지원 차이를 확인해야 할 때
+- "OO에 살아요", "OO 거주" 같은 지역 언급
+
+📝 예시:
+✅ "서울 강남구에 살아요"
+✅ "천안 두정동이에요"
+✅ "부산 사상구입니다"
+✅ "경기도 수원시 거주 중이에요"
+
+❌ 호출하지 마세요:
+- 사용자가 지역 정보를 언급하지 않았을 때
+- 이미 지역 정보가 수집되었을 때 (중복 방지)
+- 지역과 무관한 일반 질문
+
+출력: collected(수집 성공 여부), region(지역명), message(안내 메시지)""",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -163,7 +304,26 @@ MCP_SPEC = {
         },
         {
             "name": "reveal_policy_name_if_triggered",
-            "description": "제도명 공개 트리거를 확인하고, 조건 충족 시 제도명을 공개합니다",
+            "description": """사용자가 특정 혜택 카드의 정확한 제도명을 물어볼 때 제도명 공개 (한국 공공 지원).
+
+🎯 호출 시점:
+- 카드 선택 신호: "1번이 뭐예요?", "첫 번째 할게요", "2번 선택할게요"
+- 제도명 직접 질문: "정확한 이름이 뭐예요?", "제도명 알려주세요", "무슨 제도예요?"
+- 행동 의도 표현: "어디로 전화해야 해요?", "신청 방법은?", "연락처 알려주세요"
+
+📝 예시:
+✅ "1번이 정확히 뭐예요?"
+✅ "첫 번째 거 선택할게요"
+✅ "이거 정확한 제도 이름 알려주세요"
+✅ "어떻게 신청하나요?"
+✅ "어디로 전화하면 돼요?"
+
+❌ 호출하지 마세요:
+- 아직 혜택 카드를 제시하지 않았을 때
+- 일반적인 지원 정보 질문 (orchestrate_full_response 사용)
+- 분야 선택 단계
+
+출력: triggered(트리거 감지 여부), policy_name(제도명), message(안내 메시지)""",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -178,7 +338,25 @@ MCP_SPEC = {
         },
         {
             "name": "suggest_followup_options",
-            "description": "현재 상황을 기반으로 추가 탐색 가능한 지원 분야를 제안합니다 (⑥ 확장 가능성)",
+            "description": """현재 선택한 지원 외에 추가로 살펴볼 수 있는 지원 분야 제안 (한국 공공 지원).
+
+🎯 호출 시점:
+- "또 뭐가 있어요?", "다른 지원도 궁금해요" 질문
+- 한 가지 지원을 마무리하고 확장하려 할 때
+- "다른 건 없어요?", "추가로 받을 수 있는 거" 같은 추가 탐색 의도
+
+📝 예시:
+✅ "또 받을 수 있는 지원이 있나요?"
+✅ "다른 것도 궁금해요"
+✅ "주거 말고 다른 분야는 뭐가 있어요?"
+✅ "추가로 알아볼 만한 게 있을까요?"
+
+❌ 호출하지 마세요:
+- 첫 상담 시작 단계 (orchestrate_full_response 사용)
+- orchestrate_full_response가 이미 ⑥확장 안내를 포함한 경우
+- 아직 하나도 선택하지 않았을 때
+
+출력: followup_domains(추가 분야 리스트), message(안내 메시지)""",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -187,7 +365,26 @@ MCP_SPEC = {
         },
         {
             "name": "orchestrate_full_response",
-            "description": "v0.50 엔진 스펙에 따라 ①~⑦ 단계를 자동으로 실행하는 마스터 도구",
+            "description": """한국 공공 지원(복지, 주거, 의료, 고용 등) 탐색을 위한 통합 응답 생성 도구.
+
+🎯 호출 시점:
+- 사용자가 경제적 어려움이나 생활 지원이 필요한 상황을 설명할 때
+- "지원받을 수 있나요?", "혜택이 뭐가 있어요?", "도움이 필요해요" 같은 질문
+- 처음으로 공공 지원 상담을 시작할 때
+
+📝 예시:
+✅ "30대인데 3년째 취업을 못하고 있어요. 지원받을 수 있나요?"
+✅ "월세가 너무 부담돼서 주거 지원을 찾고 있어요"
+✅ "임신했는데 병원비가 너무 부담돼요. 어떻게 해야 하나요?"
+✅ "부모님과 따로 사는 고등학생인데 경제적 지원 받을 수 있나요?"
+
+❌ 호출하지 마세요:
+- 단순 인사말 ("안녕하세요", "반가워요", "처음 뵙겠습니다")
+- 일반 정보 질문 ("날씨 어때요?", "시간이 몇 시예요?", "오늘 뉴스")
+- 확인/동의 응답 ("네", "알겠어요", "고마워요", "좋아요")
+- 제도명이나 세부 정보만 궁금할 때 (다른 Tool 사용)
+
+기능: ①상황 요약 → ②분야 안내 → ③혜택 카드 2-3개 → ④행동 단계 → ⑤제도명(트리거 시) → ⑥확장 가능성 → ⑦감정 안전 메시지""",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -594,8 +791,8 @@ async def root_get() -> JSONResponse:
         {
             "mcp": True,
             "name": "public-support-mcp",
-            "version": "0.50-demo",
-            "endpoints": {"spec": "/mcp", "call": "/mcp/call", "sse": "/sse"},
+            "version": "0.50",
+            "endpoints": {"spec": "/mcp", "call": "/mcp/call"},
         }
     )
 
@@ -721,42 +918,10 @@ async def root_post(request: Request) -> JSONResponse:
         {
             "mcp": True,
             "name": "public-support-mcp",
-            "version": "0.50-demo",
-            "endpoints": {"spec": "/mcp", "call": "/mcp/call", "sse": "/sse"},
+            "version": "0.50",
+            "endpoints": {"spec": "/mcp", "call": "/mcp/call"},
         }
     )
-
-
-@app.get("/sse")
-async def sse_endpoint(request: Request):
-    """PlayMCP가 인식하는 SSE 스트림 엔드포인트"""
-    
-    async def event_generator():
-        # 초기 연결 시 MCP 서버 정보 전송
-        yield {
-            "event": "message",
-            "data": json.dumps({
-                "jsonrpc": "2.0",
-                "method": "initialize",
-                "params": MCP_SPEC
-            })
-        }
-        
-        # 연결 유지 (클라이언트 연결 끊기면 종료)
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                # 주기적으로 heartbeat 전송
-                yield {
-                    "event": "ping",
-                    "data": json.dumps({"status": "alive"})
-                }
-                await asyncio.sleep(30)
-        except asyncio.CancelledError:
-            pass
-    
-    return EventSourceResponse(event_generator())
 
 
 @app.post("/mcp/call")
