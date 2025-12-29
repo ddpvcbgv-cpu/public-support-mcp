@@ -864,7 +864,29 @@ async def root_post(request: Request) -> JSONResponse:
             tool_name = params.get("name")
             arguments = params.get("arguments", {})
             
-            session_id, state = SESSION_STORE.get(None)
+            # 🆕 세션 ID 추출: 헤더 → arguments → IP+User-Agent → Request ID 순서로 시도
+            session_id = None
+            # 1. HTTP 헤더에서 세션 ID 추출 시도
+            session_id = request.headers.get("X-Session-ID") or request.headers.get("X-Request-ID")
+            # 2. arguments에서 세션 ID 추출 시도
+            if not session_id:
+                session_id = arguments.get("_session_id") or arguments.get("session_id")
+            # 3. IP + User-Agent 조합으로 세션 추적 (같은 사용자의 연속된 요청)
+            if not session_id:
+                client_ip = request.client.host if request.client else "unknown"
+                user_agent = request.headers.get("User-Agent", "unknown")
+                # IP와 User-Agent의 해시를 사용하여 세션 키 생성
+                import hashlib
+                session_key = f"{client_ip}_{user_agent}"
+                session_id = f"mcp_{hashlib.md5(session_key.encode()).hexdigest()[:16]}"
+            # 4. Request ID를 세션 키로 사용 (최후의 수단)
+            if not session_id and request_id:
+                session_id = f"mcp_req_{request_id}"
+            
+            session_id, state = SESSION_STORE.get(session_id)
+            # 디버깅: 세션 ID 로깅
+            print(f"[DEBUG] Session ID: {session_id}, Tool: {tool_name}, Shown Cards: {state.shown_cards}")
+            
             handler = TOOL_REGISTRY.get(tool_name)
             
             if not handler:
@@ -898,12 +920,16 @@ async def root_post(request: Request) -> JSONResponse:
                             }
                         })
                     else:
+                        response_content = _build_content(tool_name, arguments, result=result)
+                        # 🆕 세션 ID를 메타데이터에 포함 (다음 호출에서 사용 가능)
                         return JSONResponse({
                             "jsonrpc": "2.0",
                             "id": request_id,
                             "result": {
-                                "content": _build_content(tool_name, arguments, result=result),
+                                "content": response_content,
                                 "isError": False,
+                                # 세션 ID를 메타데이터로 포함 (PlayMCP Gateway가 다음 호출에 전달할 수 있도록)
+                                "_session_id": session_id,
                             }
                         })
                 except Exception as exc:
