@@ -591,6 +591,11 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
             if not triggered:
                 return [{"type": "text", "text": "제도명 공개 트리거가 감지되지 않았습니다."}]
             
+            # result["message"]가 있으면 우선 사용 (이미 포맷팅된 메시지)
+            if result.get("message"):
+                return [{"type": "text", "text": result["message"]}]
+            
+            # 없으면 직접 구성
             text = f"⚠️ {result.get('warning_message', '')}\n\n"
             
             policy_info = result.get("policy_info")
