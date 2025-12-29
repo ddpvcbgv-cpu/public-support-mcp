@@ -35,8 +35,14 @@ def check_policy_trigger(message: str, state: SessionState) -> Dict[str, object]
     available_cards = state.shown_cards or state.accepted_cards or []
     for card in available_cards:
         # 카드명의 핵심 키워드 추출 (예: "문화누리카드 신청" -> "문화누리카드")
-        card_keywords = card.replace(" 신청", "").replace(" 연결", "").replace(" 점검", "").replace(" 대비", "")
-        if card_keywords.lower() in message_lower or any(word in message_lower for word in card_keywords.split() if len(word) > 2):
+        card_keywords = card.replace(" 신청", "").replace(" 연결", "").replace(" 점검", "").replace(" 대비", "").replace(" (국비지원)", "").replace(" (K-MOOC)", "")
+        card_lower = card_keywords.lower()
+        message_lower_clean = message_lower.replace(" ", "").replace("·", "")
+        
+        # 정확한 카드명 매칭 또는 핵심 키워드 매칭
+        if (card_lower in message_lower or 
+            card_lower in message_lower_clean or
+            any(word in message_lower for word in card_keywords.split() if len(word) > 2)):
             matched_card = card
             triggered = True
             trigger_type = "card_selection"
