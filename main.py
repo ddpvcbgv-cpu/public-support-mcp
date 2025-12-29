@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from schemas import BenefitCard, RichAttachment, RichResponse, Visual, ProgressBar
@@ -67,30 +67,7 @@ MCP_SPEC = {
     "tools": [
         {
             "name": "orchestrate_full_response",
-            "description": """🎯 이 MCP의 메인 진입 Tool입니다. ChatGPT에서 사용자가 공공 지원/혜택/도움 요청을 할 경우 가장 먼저 호출되어야 하는 대표 Tool입니다.
-
-이 Tool은 단독 호출을 전제로 설계되었으며, 사용자 요청에 직접 응답하는 공개 Tool입니다.
-
-한국 공공 지원(복지, 주거, 의료, 고용 등) 탐색을 위한 통합 응답 생성 도구.
-
-🎯 호출 시점:
-- 사용자가 경제적 어려움이나 생활 지원이 필요한 상황을 설명할 때
-- "지원받을 수 있나요?", "혜택이 뭐가 있어요?", "도움이 필요해요" 같은 질문
-- 처음으로 공공 지원 상담을 시작할 때
-
-📝 예시:
-✅ "30대인데 3년째 취업을 못하고 있어요. 지원받을 수 있나요?"
-✅ "월세가 너무 부담돼서 주거 지원을 찾고 있어요"
-✅ "임신했는데 병원비가 너무 부담돼요. 어떻게 해야 하나요?"
-✅ "부모님과 따로 사는 고등학생인데 경제적 지원 받을 수 있나요?"
-
-❌ 호출하지 마세요:
-- 단순 인사말 ("안녕하세요", "반가워요", "처음 뵙겠습니다")
-- 일반 정보 질문 ("날씨 어때요?", "시간이 몇 시예요?", "오늘 뉴스")
-- 확인/동의 응답 ("네", "알겠어요", "고마워요", "좋아요")
-- 제도명이나 세부 정보만 궁금할 때 (다른 Tool 사용)
-
-기능: ①상황 요약 → ②분야 안내 → ③혜택 카드 2-3개 → ④행동 단계 → ⑤제도명(트리거 시) → ⑥확장 가능성 → ⑦감정 안전 메시지""",
+            "description": "한국 공공 지원(복지, 주거, 의료, 고용 등) 탐색을 위한 통합 상담 도구. 사용자의 경제적 어려움이나 생활 지원 요청에 대해 상황 분석, 지원 분야 안내, 혜택 카드 제안, 실행 계획을 제공합니다.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -932,12 +909,8 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
 
 
 @app.post("/")
-async def root_post(request: Request):
-    """POST: JSON-RPC 2.0 기반 MCP 프로토콜 처리 (Streamable HTTP 지원)"""
-    
-    # Streamable HTTP (SSE) 지원 확인
-    accept_header = request.headers.get("Accept", "")
-    use_streaming = "text/event-stream" in accept_header
+async def root_post(request: Request) -> JSONResponse:
+    """POST: JSON-RPC 2.0 기반 MCP 프로토콜 처리 (Streamable HTTP - JSON-RPC over HTTP)"""
     
     # POST body 읽기
     try:
@@ -945,7 +918,7 @@ async def root_post(request: Request):
         body_str = body.decode('utf-8') if body else "{}"
         
         # 디버깅: 실제 요청 내용 로깅
-        print(f"[DEBUG] POST / received (streaming: {use_streaming}):")
+        print(f"[DEBUG] POST / received:")
         print(f"  Headers: {dict(request.headers)}")
         print(f"  Body: {body_str[:500]}")  # 처음 500자만
         
@@ -968,24 +941,8 @@ async def root_post(request: Request):
             "endpoints": {"spec": "/mcp", "call": "/mcp/call"},
         }
     
-    # Streamable HTTP (SSE) 응답
-    if use_streaming:
-        async def generate_sse():
-            # SSE 형식으로 응답 전송
-            response_json = json.dumps(response_data, ensure_ascii=False)
-            yield f"data: {response_json}\n\n"
-        
-        return StreamingResponse(
-            generate_sse(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
-        )
-    else:
-        # 일반 JSON 응답
-        return JSONResponse(response_data)
+    # JSON-RPC 응답 (Streamable HTTP는 JSON-RPC over HTTP 방식)
+    return JSONResponse(response_data)
 
 
 @app.post("/mcp/call")
@@ -1102,13 +1059,7 @@ def get_openapi_spec() -> Dict[str, Any]:
             "/orchestrate_full_response": {
                 "post": {
                     "summary": "공공 지원 상담 (메인 진입 Tool)",
-                    "description": """🎯 이 MCP의 메인 진입 Tool입니다. ChatGPT에서 사용자가 공공 지원/혜택/도움 요청을 할 경우 가장 먼저 호출되어야 하는 대표 Tool입니다.
-
-이 Tool은 단독 호출을 전제로 설계되었으며, 사용자 요청에 직접 응답하는 공개 Tool입니다.
-
-한국 공공 지원(복지, 주거, 의료, 고용 등) 탐색을 위한 통합 응답 생성 도구.
-
-기능: ①상황 요약 → ②분야 안내 → ③혜택 카드 2-3개 → ④행동 단계 → ⑤제도명(트리거 시) → ⑥확장 가능성 → ⑦감정 안전 메시지""",
+                    "description": "한국 공공 지원(복지, 주거, 의료, 고용 등) 탐색을 위한 통합 상담 도구. 사용자의 경제적 어려움이나 생활 지원 요청에 대해 상황 분석, 지원 분야 안내, 혜택 카드 제안, 실행 계획을 제공합니다.",
                     "operationId": "orchestrate_full_response",
                     "requestBody": {
                         "required": True,
