@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from typing import Any, Callable, Dict, List
-from uuid import uuid4
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from schemas import BenefitCard, RichAttachment, RichResponse, Visual, ProgressBar
 from state import SESSION_STORE, SessionState
-from constants import ONBOARDING_MESSAGE, ERROR_CODES
+from constants import ONBOARDING_MESSAGE
 from tools.actions import generate_action_steps
 from tools.cards import rank_support_cards
 from tools.domains import expose_available_domains
@@ -69,25 +67,25 @@ MCP_SPEC = {
     "tools": [
         {
             "name": "orchestrate_full_response",
-            "description": """공공지원·복지·생활 영역에서
-사용자가 자신의 상황을 이해하고
-공식 확인 경로를 살펴볼 수 있도록 돕는 도구입니다.
+            "description": """⭐ 한국 공공 지원 상담의 메인 진입 도구입니다. 
+사용자가 상황을 설명하거나 지원을 요청할 때 가장 먼저 호출해야 하는 도구입니다.
 
-다음과 같은 표현이 포함된 질문에서는
-이 도구를 사용하는 것이 적절할 수 있습니다:
-- "지원 받을 수 있나요" / "도움이 필요해요"
-- "너무 힘들어요" / "혼자 감당하고 있어요"
-- 나이, 보호자, 주거, 소득, 취업 공백이 언급된 상황 설명
-- 학생, 청소년, 한부모, 장기 미취업자 관련 질문
+호출 필수:
+- 처음 상담을 시작할 때 (상황 설명, 지원 요청 등)
+- 분야가 불명확하거나 여러 분야가 섞여 있을 때
+- 위기 상황(성폭행, 가정폭력 등) 포함 모든 상황
 
-이 도구는
-확정적인 판단이나 단정을 대신하지 않고,
-지금 단계에서 확인 가능한 범주와
-공식 경로를 차분히 정리하는 역할을 합니다.
+⚠️ 호출 금지 (이 경우 rank_support_cards 사용):
+- 특정 분야가 명시된 경우: "월세 지원", "주거 지원", "생활비 지원", "의료 지원" 등
+- 분야 키워드 + 필요/절실 표현: "월세 지원이 필요해요", "고정지원이 절실해요"
+- 분야 키워드 + 힘듦 표현: "주거가 너무 힘들어요", "생활비가 부족해요"
+→ 이런 경우에는 사용자가 직접 분야를 선택한 것으로 간주하고, 
+  해당 분야의 카드를 바로 제공하는 것이 더 적절합니다.
 
-사용자가 이미 특정 기관이나 제도명을 명확히 알고
-단순 확인만 요청하는 경우에는
-다른 응답 방식이 더 적절할 수 있습니다.""",
+이 도구는:
+①상황 요약 → ②분야 안내 → ③혜택 카드 2-3개 → ④행동 단계 → 
+⑤제도명(트리거 시) → ⑥확장 가능성 → ⑦감정 안전 메시지
+를 자동으로 제공합니다.""",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -468,17 +466,7 @@ def _orchestrate(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     user_message = str(args.get("user_message", "") or "").strip()
     skip_onboarding = args.get("skip_onboarding", False)
     client_type = args.get("_client_type", "default")  # 🆕 클라이언트 타입 가져오기
-    request_id = args.get("_request_id")  # v1.2 F: request_id 전달
-    # v1.2 F: request_id를 항상 문자열로 변환 (MCP 프로토콜의 id는 정수일 수 있음)
-    if request_id is not None:
-        request_id = str(request_id)
-    previous_mcp_meta = state.previous_mcp_meta  # v1.2: 이전 mcp_meta 전달
-    orchestrated = orchestrate_full_response(
-        user_message, state, skip_onboarding, 
-        client_type=client_type, 
-        request_id=request_id,
-        previous_mcp_meta=previous_mcp_meta
-    )
+    orchestrated = orchestrate_full_response(user_message, state, skip_onboarding, client_type=client_type)
     return {
         "orchestrated": orchestrated,
         "formatted_text": format_orchestrated_response(orchestrated)
@@ -676,7 +664,7 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
                     if summary:
                         text_parts.append(f"📋 {summary}")
                 
-                # ② 분야 안내 (항상 포함 - 완결성 보강)
+                # ② 분야 안내
                 if "step_2_available_domains" in orchestrated:
                     step2 = orchestrated["step_2_available_domains"]
                     domains = step2.get("domains", [])
@@ -718,10 +706,6 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
                         text_parts.append(f"\n🎯 오늘 할 일: {actions['today']}")
                     if actions.get("tomorrow"):
                         text_parts.append(f"📅 내일까지: {actions['tomorrow']}")
-                
-                # 🆕 완결성 보강: step_2가 없으면 최소한의 안내 포함
-                if not text_parts:
-                    text_parts.append("✅ 공공 지원 경로를 확인 중입니다.")
                 
                 if text_parts:
                     return [{"type": "text", "text": "\n".join(text_parts)}]
@@ -913,13 +897,6 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
     method = payload.get("method")
     request_id = payload.get("id")
     
-    # v1.2 F: request_id 생성 (없으면 새로 생성) 및 문자열 변환
-    # MCP 프로토콜의 id는 정수일 수 있으므로 항상 문자열로 변환
-    if not request_id:
-        request_id = f"req_{uuid4().hex[:12]}"
-    else:
-        request_id = str(request_id)  # 정수 id를 문자열로 변환
-    
     print(f"[DEBUG] Parsed - method: {method}, id: {request_id}")
     
     if method == "initialize":
@@ -975,8 +952,6 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
         
         # 🆕 arguments에 client_type 추가 (orchestrate_full_response에서 사용)
         arguments["_client_type"] = client_type
-        # v1.2 F: request_id 추가
-        arguments["_request_id"] = request_id
         
         handler = TOOL_REGISTRY.get(tool_name)
         
@@ -992,18 +967,9 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
             }
         
         try:
-            # v1.2 F: request_id를 arguments에 추가
-            arguments["_request_id"] = request_id
-            
             result = handler(arguments, state)
             if session_id:
                 SESSION_STORE.set(session_id, state)
-            
-            # v1.2 F: result에 mcp_meta가 있으면 request_id 추가
-            if isinstance(result, dict) and "mcp_meta" in result.get("orchestrated", {}):
-                result["orchestrated"]["mcp_meta"]["request_id"] = request_id
-            elif isinstance(result, dict) and "mcp_meta" in result:
-                result["mcp_meta"]["request_id"] = request_id
             
             # 🆕 Rich Response 생성 (선택적)
             use_rich = arguments.get("_use_rich_response", False)
@@ -1197,7 +1163,7 @@ def get_openapi_spec() -> Dict[str, Any]:
         "openapi": "3.0.0",
         "info": {
             "title": "Public Support Navigator",
-            "description": "공공지원·복지·생활 영역의 상황 정리 및 공식 경로 안내를 위한 내비게이터",
+            "description": "공공 지원 내비게이터: 판정이 아닌 선택지·행동 설계 중심의 MCP 서버",
             "version": "0.50"
         },
         "servers": [
@@ -1209,26 +1175,26 @@ def get_openapi_spec() -> Dict[str, Any]:
         "paths": {
             "/orchestrate_full_response": {
                 "post": {
-                    "summary": "공공지원 상황 정리 및 공식 경로 안내",
-                    "description": """공공지원·복지·생활 영역에서
-사용자가 자신의 상황을 이해하고
-공식 확인 경로를 살펴볼 수 있도록 돕는 도구입니다.
+                    "summary": "공공 지원 상담 (메인 진입 Tool)",
+                    "description": """⭐ 한국 공공 지원 상담의 메인 진입 도구입니다. 
+사용자가 상황을 설명하거나 지원을 요청할 때 가장 먼저 호출해야 하는 도구입니다.
 
-다음과 같은 표현이 포함된 질문에서는
-이 도구를 사용하는 것이 적절할 수 있습니다:
-- "지원 받을 수 있나요" / "도움이 필요해요"
-- "너무 힘들어요" / "혼자 감당하고 있어요"
-- 나이, 보호자, 주거, 소득, 취업 공백이 언급된 상황 설명
-- 학생, 청소년, 한부모, 장기 미취업자 관련 질문
+호출 필수:
+- 처음 상담을 시작할 때 (상황 설명, 지원 요청 등)
+- 분야가 불명확하거나 여러 분야가 섞여 있을 때
+- 위기 상황(성폭행, 가정폭력 등) 포함 모든 상황
 
-이 도구는
-확정적인 판단이나 단정을 대신하지 않고,
-지금 단계에서 확인 가능한 범주와
-공식 경로를 차분히 정리하는 역할을 합니다.
+⚠️ 호출 금지 (이 경우 다른 도구 사용):
+- 특정 분야가 명시된 경우: "월세 지원", "주거 지원", "생활비 지원", "의료 지원" 등
+- 분야 키워드 + 필요/절실 표현: "월세 지원이 필요해요", "고정지원이 절실해요"
+- 분야 키워드 + 힘듦 표현: "주거가 너무 힘들어요", "생활비가 부족해요"
+→ 이런 경우에는 사용자가 직접 분야를 선택한 것으로 간주하고, 
+  해당 분야의 카드를 바로 제공하는 것이 더 적절합니다.
 
-사용자가 이미 특정 기관이나 제도명을 명확히 알고
-단순 확인만 요청하는 경우에는
-다른 응답 방식이 더 적절할 수 있습니다.""",
+이 도구는:
+①상황 요약 → ②분야 안내 → ③혜택 카드 2-3개 → ④행동 단계 → 
+⑤제도명(트리거 시) → ⑥확장 가능성 → ⑦감정 안전 메시지
+를 자동으로 제공합니다.""",
                     "operationId": "orchestrate_full_response",
                     "requestBody": {
                         "required": True,
@@ -1343,11 +1309,7 @@ async def orchestrate_full_response_endpoint(request: Request):
         
         # orchestrate_full_response 사용
         session_id, state = SESSION_STORE.get(None)
-        result = orchestrate_full_response(
-            user_message, state, 
-            skip_onboarding=skip_onboarding,
-            previous_mcp_meta=state.previous_mcp_meta
-        )
+        result = orchestrate_full_response(user_message, state, skip_onboarding=skip_onboarding)
         formatted = format_orchestrated_response(result)
         
         return JSONResponse({
@@ -1375,11 +1337,7 @@ async def chat_endpoint(request: Request):
         
         # orchestrate_full_response 사용
         session_id, state = SESSION_STORE.get(None)
-        result = orchestrate_full_response(
-            user_message, state, 
-            skip_onboarding=False,
-            previous_mcp_meta=state.previous_mcp_meta
-        )
+        result = orchestrate_full_response(user_message, state, skip_onboarding=False)
         formatted = format_orchestrated_response(result)
         
         return JSONResponse({

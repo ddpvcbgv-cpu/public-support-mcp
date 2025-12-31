@@ -4,10 +4,8 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Dict, List
 
-from constants import OFFICIAL_SOURCE_CATEGORIES, TOP_20_CORE_CARDS, STALE_THRESHOLD_DAYS_TOP20, STALE_THRESHOLD_DAYS_OTHER
 from state import SessionState
 from tools.domains import DOMAIN_HINTS, DOMAIN_PRIORITY
 
@@ -249,118 +247,6 @@ def _guess_domain(state: SessionState) -> str:
     return DOMAIN_PRIORITY[0]
 
 
-def _is_top20_card(domain: str, card_name: str) -> bool:
-    """카드가 Top 20에 포함되는지 확인"""
-    return (domain, card_name) in TOP_20_CORE_CARDS
-
-
-def _get_card_metadata(domain: str, card: Dict[str, str]) -> Dict[str, str]:
-    """카드에 메타데이터 추가 (v1.2 A 요구사항)"""
-    card_name = card.get("card", "")
-    
-    # 기본값 설정 (실제로는 카드별로 설정되어야 함)
-    # TODO: 각 카드에 last_verified_date와 official_source_category를 개별적으로 설정
-    last_verified_date = card.get("last_verified_date", "2025-01")  # 기본값: 현재 월
-    official_source_category = card.get("official_source_category", "공공 포털(복지로·정부24 등)")
-    doc_type = card.get("doc_type", "온라인 안내")
-    
-    # stale 계산 (D 요구사항)
-    is_top20 = _is_top20_card(domain, card_name)
-    threshold_days = STALE_THRESHOLD_DAYS_TOP20 if is_top20 else STALE_THRESHOLD_DAYS_OTHER
-    
-    try:
-        # YYYY-MM을 해당 월 1일로 해석
-        verified_year, verified_month = map(int, last_verified_date.split("-"))
-        verified_date = datetime(verified_year, verified_month, 1)
-        now = datetime.now()
-        days_since_verification = (now - verified_date).days
-        stale = days_since_verification > threshold_days
-    except (ValueError, AttributeError):
-        # 파싱 실패 시 기본값
-        stale = False
-    
-    # Evidence line 생성 (A 요구사항)
-    stale_tag = " · 갱신 필요" if stale else ""
-    evidence = f"근거: {official_source_category} · {doc_type} (검증 {last_verified_date}){stale_tag}"
-    
-    # 카드에 메타데이터 추가
-    card_with_meta = card.copy()
-    card_with_meta["last_verified_date"] = last_verified_date
-    card_with_meta["official_source_category"] = official_source_category
-    card_with_meta["doc_type"] = doc_type
-    card_with_meta["evidence"] = evidence
-    card_with_meta["stale"] = stale
-    
-    return card_with_meta
-
-
-def _classify_card_level(domain: str, card: Dict[str, str], state: SessionState) -> str:
-    """
-    Phase 2: 카드를 L1/L2/L3로 분류
-    
-    L1: 자격 확인이 필요한 지원(조건부) - eligibility-dependent
-    L2: 누구나 이용 가능한 공공 정보 - universally available
-    L3: 더 확인할 공식 경로 - official next steps
-    """
-    card_name = card.get("card", "")
-    where = card.get("where", "")
-    how = card.get("how", "")
-    
-    # L3: 공식 경로/확인 경로 키워드
-    l3_keywords = ["공식 포털", "주민센터", "콜센터", "문의", "확인", "상담소", "센터"]
-    if any(kw in where.lower() or kw in card_name.lower() for kw in l3_keywords):
-        # 단, "상담"이 포함된 카드는 L1일 수도 있음
-        if "상담" in card_name and ("자격" in how or "확인" in how):
-            return "L1"
-        # 일반적인 공식 경로는 L3
-        if "공식" in card_name or "경로" in card_name or "확인" in card_name:
-            return "L3"
-    
-    # L2: 누구나 이용 가능한 정보 (상담, 안내, 정보 제공)
-    l2_keywords = ["안내", "정보", "상담", "연결", "알아보기"]
-    if any(kw in card_name.lower() for kw in l2_keywords):
-        # 자격 확인이 필요 없는 경우
-        if "자격" not in how and "확인" not in how and "신청" not in how:
-            return "L2"
-    
-    # L1: 기본값 (자격 확인이 필요한 지원)
-    # 대부분의 카드는 L1
-    return "L1"
-
-
-def _create_l3_card(domain: str, state: SessionState) -> Dict[str, str]:
-    """
-    Phase 2: L3 카드 생성 (공식 경로)
-    """
-    if state.region_hint:
-        region = state.region_hint
-        return {
-            "card": "공식 확인 경로",
-            "이게_뭐냐면": f"{region} 지역의 공식 지원 경로를 확인하실 수 있어요",
-            "왜_지금_맞냐면": "공식 경로에서 최신 정보와 정확한 절차를 확인하실 수 있어서요",
-            "지금_하실_수_있는_말": "공식 경로에서 확인하고 싶어요",
-            "where": f"📞 {region} 주민센터 / 복지로 129 / 정부24",
-            "how": "1) 주민센터 방문 또는 전화 2) 복지로 온라인 상담 3) 정부24 포털 확인",
-            "막히면": "주민센터 전화가 어려우시면, 직접 방문하시거나 복지로 온라인 상담을 이용하세요",
-            "last_verified_date": "2025-01",
-            "official_source_category": "공공 포털(복지로·정부24 등)",
-            "doc_type": "온라인 안내"
-        }
-    else:
-        return {
-            "card": "공식 확인 경로",
-            "이게_뭐냐면": "공식 포털과 상담 창구에서 최신 정보를 확인하실 수 있어요",
-            "왜_지금_맞냐면": "공식 경로에서 정확한 절차와 최신 정보를 확인하실 수 있어서요",
-            "지금_하실_수_있는_말": "공식 경로에서 확인하고 싶어요",
-            "where": "📞 복지로 129 / 정부24 / 주민센터",
-            "how": "1) 복지로 온라인 상담 2) 정부24 포털 확인 3) 주민센터 문의",
-            "막히면": "복지로 온라인 상담이 어려우시면, 주민센터에 직접 방문하시거나 전화로 문의하세요",
-            "last_verified_date": "2025-01",
-            "official_source_category": "공공 포털(복지로·정부24 등)",
-            "doc_type": "온라인 안내"
-        }
-
-
 def rank_support_cards(state: SessionState) -> Dict[str, object]:
     """우선 탐색할 혜택 카드 2~3개를 제안한다."""
     # 스코어링 시스템 적용
@@ -375,97 +261,9 @@ def rank_support_cards(state: SessionState) -> Dict[str, object]:
     # 점수 기반 정렬
     scored_cards = rank_benefits_by_score(available_cards, state)
     
-    # Phase 2: 3-Level Layering
-    # 카드를 레이어별로 분류
-    l1_cards = []
-    l2_cards = []
-    
-    for card in scored_cards:
-        level = _classify_card_level(domain, card, state)
-        card_with_level = card.copy()
-        card_with_level["_level"] = level  # 내부 추적용
-        
-        if level == "L1":
-            l1_cards.append(card_with_level)
-        elif level == "L2":
-            l2_cards.append(card_with_level)
-        # L3는 나중에 생성
-    
-    # Phase 2: 최종 구성 (L1 + L2 + 선택적 L3)
     max_cards = 3 if state.urgency_level <= 2 else 2
-    selected = []
-    
-    # L1 선택 (최대 2개, USER_STATED >= 2 AND INFERRED == 0일 때만 3개)
-    # USER_STATED/INFERRED 확인을 위해 임시로 rationale 계산
-    from tools.orchestrator import _build_selection_rationale
-    from tools.normalize import normalize_user_context
-    normalize_result = normalize_user_context("", state)  # 키워드만 추출
-    rationale = _build_selection_rationale("", state, normalize_result)
-    
-    user_stated_keys = set(item.get("key") for item in rationale if item.get("source") == "USER_STATED")
-    has_inferred = any(item.get("source") == "INFERRED" for item in rationale)
-    
-    # L1=3 조건: USER_STATED distinct key count >= 2 AND INFERRED == 0
-    max_l1 = 3 if (len(user_stated_keys) >= 2 and not has_inferred) else 2
-    selected_l1 = l1_cards[:max_l1]  # BUG FIX: selected_l1 변수 정의
-    selected.extend(selected_l1)
-    
-    # L2 선택
-    # L1=3일 때는 마지막 L1에 L2를 embedded할 수 있음 (옵션 B)
-    l2_to_add = None
-    l2_embedded = False  # L2가 L1에 embedded되었는지 추적
-    if l2_cards:
-        l2_to_add = l2_cards[0]
-    
-    # L1=3이고 L2가 있으면, 마지막 L1에 L2 embedded 옵션 (B) 구현
-    if l2_to_add and max_l1 == 3 and len(selected_l1) == 3:
-        # 옵션 (B): L2를 마지막 L1 카드에 embedded
-        last_l1_card = selected_l1[-1]
-        l2_card_name = l2_to_add.get("card", "")
-        l2_description = l2_to_add.get("이게_뭐냐면", "")
-        
-        # 마지막 L1 카드의 "막히면" 필드에 L2 내용 추가
-        if "막히면" in last_l1_card:
-            last_l1_card["막히면"] += f"\n\n[누구나] {l2_card_name}: {l2_description}"
-        else:
-            last_l1_card["막히면"] = f"[누구나] {l2_card_name}: {l2_description}"
-        
-        l2_embedded = True
-        # dedicated L2 카드는 추가하지 않음 (옵션 B)
-    elif l2_to_add:
-        # 옵션 (A): dedicated L2 카드 추가
-        selected.append(l2_to_add)
-    elif not selected:
-        # L1이 없으면 L2만 선택
-        if l2_cards:
-            selected.extend(l2_cards[:1])
-    
-    # L3는 orchestrate_full_response에서 조건부로 추가
-    
-    # v1.2: 각 카드에 메타데이터 추가
-    selected_with_meta = [_get_card_metadata(domain, card) for card in selected]
-    
-    # Phase 2: 레이어 prefix 추가
-    for card in selected_with_meta:
-        level = card.get("_level", "L1")
-        card_name = card.get("card", "")
-        
-        if level == "L1":
-            card["card"] = f"[조건부] {card_name}"
-        elif level == "L2":
-            card["card"] = f"[누구나] {card_name}"
-        elif level == "L3":
-            card["card"] = f"[공식경로] {card_name}"
+    selected = scored_cards[:max_cards]
 
-    state.shown_cards = _deduplicate(state.shown_cards + [card["card"] for card in selected_with_meta])
-    
-    # L2 embedded 정보 반환 (orchestrate_full_response에서 card_layers 업데이트용)
-    return {
-        "domain": domain, 
-        "cards": selected_with_meta, 
-        "_l1_cards": l1_cards, 
-        "_l2_cards": l2_cards,
-        "_l2_embedded": l2_embedded,  # L2가 embedded되었는지
-        "_last_l1_index": len(selected_l1) - 1 if l2_embedded else None  # embedded된 경우 마지막 L1 인덱스
-    }
+    state.shown_cards = _deduplicate(state.shown_cards + [card["card"] for card in selected])
+    return {"domain": domain, "cards": selected}
 
