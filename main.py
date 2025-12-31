@@ -469,6 +469,9 @@ def _orchestrate(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     skip_onboarding = args.get("skip_onboarding", False)
     client_type = args.get("_client_type", "default")  # 🆕 클라이언트 타입 가져오기
     request_id = args.get("_request_id")  # v1.2 F: request_id 전달
+    # v1.2 F: request_id를 항상 문자열로 변환 (MCP 프로토콜의 id는 정수일 수 있음)
+    if request_id is not None:
+        request_id = str(request_id)
     previous_mcp_meta = state.previous_mcp_meta  # v1.2: 이전 mcp_meta 전달
     orchestrated = orchestrate_full_response(
         user_message, state, skip_onboarding, 
