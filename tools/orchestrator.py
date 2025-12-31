@@ -357,25 +357,8 @@ def format_orchestrated_response(orchestrated: Dict[str, Any]) -> str:
             lines.append("")
             
             for i, card in enumerate(cards, 1):
-                # 🆕 v1.1.1: Prefix 추가 (인덱스 기반)
                 card_title = card.get('card', '')
-                card_idx = i - 1  # enumerate는 1부터 시작하므로 실제 인덱스는 i-1
-                total_cards = len(cards)
-                
-                if total_cards == 1:
-                    prefix = "[조건부]"
-                elif total_cards == 2:
-                    prefix = "[조건부]" if card_idx == 0 else "[누구나]"
-                else:  # 3개 이상
-                    if card_idx == 0:
-                        prefix = "[조건부]"
-                    elif card_idx == 1:
-                        prefix = "[누구나]"
-                    else:
-                        prefix = "[공식경로]"
-                
-                prefixed_title = f"{prefix}{card_title}" if card_title else card_title
-                lines.append(f"【{prefixed_title}】")
+                lines.append(f"【{card_title}】")
                 lines.append("")
                 
                 # 🆕 v1.1.1: Evidence Line 추가
