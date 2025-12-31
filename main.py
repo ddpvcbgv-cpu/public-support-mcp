@@ -906,9 +906,12 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
     method = payload.get("method")
     request_id = payload.get("id")
     
-    # v1.2 F: request_id 생성 (없으면 새로 생성)
+    # v1.2 F: request_id 생성 (없으면 새로 생성) 및 문자열 변환
+    # MCP 프로토콜의 id는 정수일 수 있으므로 항상 문자열로 변환
     if not request_id:
         request_id = f"req_{uuid4().hex[:12]}"
+    else:
+        request_id = str(request_id)  # 정수 id를 문자열로 변환
     
     print(f"[DEBUG] Parsed - method: {method}, id: {request_id}")
     
