@@ -536,11 +536,31 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
                 text = f"지금 상황을 기준으로 보면, {domain} 분야에서 열려 있는 선택지를 정리해봤어요.\n\n"
                 
                 for i, card in enumerate(cards, 1):
-                    # 점수 제거, 카드명만 표시
-                    text += f"\n[{card.get('card', '')}]\n\n"
+                    # 🆕 v1.1.1: Prefix 추가 (인덱스 기반)
+                    card_title = card.get('card', '')
+                    card_idx = i - 1  # enumerate는 1부터 시작하므로 실제 인덱스는 i-1
+                    total_cards = len(cards)
                     
+                    if total_cards == 1:
+                        prefix = "[조건부]"
+                    elif total_cards == 2:
+                        prefix = "[조건부]" if card_idx == 0 else "[누구나]"
+                    else:  # 3개 이상
+                        if card_idx == 0:
+                            prefix = "[조건부]"
+                        elif card_idx == 1:
+                            prefix = "[누구나]"
+                        else:
+                            prefix = "[공식경로]"
+                    
+                    prefixed_title = f"{prefix}{card_title}" if card_title else card_title
+                    text += f"\n[{prefixed_title}]\n\n"
+                    
+                    # 🆕 v1.1.1: Evidence Line 추가
                     if card.get('이게_뭐냐면'):
-                        text += f"이게 뭐냐면:\n{card.get('이게_뭐냐면')}\n\n"
+                        description = card.get('이게_뭐냐면', '').rstrip()
+                        evidence_line = " 근거: 공식 안내 참조 · 공공 지원 안내 (검증 2025-12)"
+                        text += f"이게 뭐냐면:\n{description + evidence_line}\n\n"
                     
                     if card.get('왜_지금_맞냐면'):
                         text += f"왜 지금 맞냐면:\n{card.get('왜_지금_맞냐면')}\n\n"
@@ -681,11 +701,34 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
                         text_parts.append(f"\n🎯 {domain} 분야에서 {len(cards)}개의 지원 옵션을 찾았습니다:\n")
                         
                         for i, card in enumerate(cards, 1):
+                            # 🆕 v1.1.1: Prefix 추가 (인덱스 기반)
                             card_name = card.get("card", "")
+                            card_idx = i - 1  # enumerate는 1부터 시작하므로 실제 인덱스는 i-1
+                            total_cards = len(cards)
+                            
+                            if total_cards == 1:
+                                prefix = "[조건부]"
+                            elif total_cards == 2:
+                                prefix = "[조건부]" if card_idx == 0 else "[누구나]"
+                            else:  # 3개 이상
+                                if card_idx == 0:
+                                    prefix = "[조건부]"
+                                elif card_idx == 1:
+                                    prefix = "[누구나]"
+                                else:
+                                    prefix = "[공식경로]"
+                            
+                            prefixed_name = f"{prefix}{card_name}" if card_name else card_name
                             description = card.get("이게_뭐냐면", "")
                             where = card.get("where", "")
                             
-                            text_parts.append(f"\n【{i}. {card_name}】")
+                            # 🆕 v1.1.1: Evidence Line 추가
+                            if description:
+                                description = description.rstrip()
+                                evidence_line = " 근거: 공식 안내 참조 · 공공 지원 안내 (검증 2025-12)"
+                                description = description + evidence_line
+                            
+                            text_parts.append(f"\n【{i}. {prefixed_name}】")
                             if description:
                                 text_parts.append(f"→ {description}")
                             if where:
@@ -781,6 +824,36 @@ def _build_rich_response(
         # 카드 첨부
         card_attachments = []
         for i, card in enumerate(cards, 1):
+            # 🆕 v1.1.1: Prefix 추가 (인덱스 기반)
+            card_title = card.get("card", "")
+            card_idx = i - 1  # enumerate는 1부터 시작하므로 실제 인덱스는 i-1
+            total_cards = len(cards)
+            
+            if total_cards == 1:
+                prefix = "[조건부]"
+            elif total_cards == 2:
+                prefix = "[조건부]" if card_idx == 0 else "[누구나]"
+            else:  # 3개 이상
+                if card_idx == 0:
+                    prefix = "[조건부]"
+                elif card_idx == 1:
+                    prefix = "[누구나]"
+                else:
+                    prefix = "[공식경로]"
+            
+            prefixed_title = f"{prefix}{card_title}" if card_title else card_title
+            
+            # 🆕 v1.1.1: Evidence Line 추가
+            description = card.get("description", "")
+            if not description:
+                # description이 없으면 "이게_뭐냐면" 사용
+                description = card.get("이게_뭐냐면", "")
+            
+            if description:
+                description = description.rstrip()
+                evidence_line = " 근거: 공식 안내 참조 · 공공 지원 안내 (검증 2025-12)"
+                description = description + evidence_line
+            
             score = card.get("eligibility_score", 50)
             
             # 점수에 따른 색상
@@ -798,8 +871,8 @@ def _build_rich_response(
                 RichAttachment(
                     type="card",
                     data={
-                        "title": card.get("card", ""),
-                        "description": card.get("description", ""),
+                        "title": prefixed_title,
+                        "description": description,
                         "eligibility_score": score,
                         "where": card.get("where"),
                         "how": card.get("how"),
