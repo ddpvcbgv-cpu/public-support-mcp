@@ -75,3 +75,70 @@ class RichResponse(BaseModel):
     attachments: List[RichAttachment] = Field(default_factory=list, description="구조화된 첨부")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="추가 메타데이터")
 
+
+class MCPMeta(BaseModel):
+    """서버 레벨 메타데이터 (UI 노출 안 함, v1.2 요구사항)"""
+    # B) selection_rationale
+    selection_rationale: List[Dict[str, str]] = Field(
+        default_factory=list,
+        description="카드 선택 근거 [{key, value, source}] where source ∈ {USER_STATED, INFERRED}"
+    )
+    
+    # B) TEMPORARY_SUGGESTION + action_lock
+    card_state: Optional[Literal["TEMPORARY_SUGGESTION", "CONFIRMED"]] = Field(
+        default=None,
+        description="카드 상태 (L1 전용)"
+    )
+    action_lock: bool = Field(
+        default=False,
+        description="행동 단계 잠금 여부 (L1 전용)"
+    )
+    confirmation: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="확인 질문 {question, options, expected_values, target_keys}"
+    )
+    card_overrides: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="카드별 오버라이드 [{card_id_or_index, card_state, action_lock}]"
+    )
+    
+    # C) confidence / needs_verification
+    confidence: Literal["low", "med", "high"] = Field(
+        default="med",
+        description="신뢰도"
+    )
+    needs_verification: bool = Field(
+        default=False,
+        description="검증 필요 여부"
+    )
+    
+    # E) Crisis 2-step guardrail
+    safety_status: Optional[Literal["SAFE", "UNSAFE", "NOT_SURE"]] = Field(
+        default=None,
+        description="안전 상태"
+    )
+    
+    # F) Error/availability signals
+    error_code: Optional[str] = Field(
+        default=None,
+        description="에러 코드"
+    )
+    request_id: Optional[str] = Field(
+        default=None,
+        description="요청 ID (고유)"
+    )
+    retry_after: Optional[int] = Field(
+        default=None,
+        description="재시도 대기 시간 (초)"
+    )
+    
+    # Phase 2: 3-Level Layering (나중에 추가)
+    layering: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="레이어링 정보 (Phase 2)"
+    )
+    card_layers: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="카드별 레이어 정보 (Phase 2)"
+    )
+

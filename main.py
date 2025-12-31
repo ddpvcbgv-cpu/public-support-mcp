@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any, Callable, Dict, List
+from uuid import uuid4
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from schemas import BenefitCard, RichAttachment, RichResponse, Visual, ProgressBar
 from state import SESSION_STORE, SessionState
-from constants import ONBOARDING_MESSAGE
+from constants import ONBOARDING_MESSAGE, ERROR_CODES
 from tools.actions import generate_action_steps
 from tools.cards import rank_support_cards
 from tools.domains import expose_available_domains
@@ -466,7 +468,14 @@ def _orchestrate(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     user_message = str(args.get("user_message", "") or "").strip()
     skip_onboarding = args.get("skip_onboarding", False)
     client_type = args.get("_client_type", "default")  # 🆕 클라이언트 타입 가져오기
-    orchestrated = orchestrate_full_response(user_message, state, skip_onboarding, client_type=client_type)
+    request_id = args.get("_request_id")  # v1.2 F: request_id 전달
+    previous_mcp_meta = state.previous_mcp_meta  # v1.2: 이전 mcp_meta 전달
+    orchestrated = orchestrate_full_response(
+        user_message, state, skip_onboarding, 
+        client_type=client_type, 
+        request_id=request_id,
+        previous_mcp_meta=previous_mcp_meta
+    )
     return {
         "orchestrated": orchestrated,
         "formatted_text": format_orchestrated_response(orchestrated)
@@ -897,6 +906,10 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
     method = payload.get("method")
     request_id = payload.get("id")
     
+    # v1.2 F: request_id 생성 (없으면 새로 생성)
+    if not request_id:
+        request_id = f"req_{uuid4().hex[:12]}"
+    
     print(f"[DEBUG] Parsed - method: {method}, id: {request_id}")
     
     if method == "initialize":
@@ -952,6 +965,8 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
         
         # 🆕 arguments에 client_type 추가 (orchestrate_full_response에서 사용)
         arguments["_client_type"] = client_type
+        # v1.2 F: request_id 추가
+        arguments["_request_id"] = request_id
         
         handler = TOOL_REGISTRY.get(tool_name)
         
@@ -967,9 +982,18 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
             }
         
         try:
+            # v1.2 F: request_id를 arguments에 추가
+            arguments["_request_id"] = request_id
+            
             result = handler(arguments, state)
             if session_id:
                 SESSION_STORE.set(session_id, state)
+            
+            # v1.2 F: result에 mcp_meta가 있으면 request_id 추가
+            if isinstance(result, dict) and "mcp_meta" in result.get("orchestrated", {}):
+                result["orchestrated"]["mcp_meta"]["request_id"] = request_id
+            elif isinstance(result, dict) and "mcp_meta" in result:
+                result["mcp_meta"]["request_id"] = request_id
             
             # 🆕 Rich Response 생성 (선택적)
             use_rich = arguments.get("_use_rich_response", False)
@@ -1309,7 +1333,11 @@ async def orchestrate_full_response_endpoint(request: Request):
         
         # orchestrate_full_response 사용
         session_id, state = SESSION_STORE.get(None)
-        result = orchestrate_full_response(user_message, state, skip_onboarding=skip_onboarding)
+        result = orchestrate_full_response(
+            user_message, state, 
+            skip_onboarding=skip_onboarding,
+            previous_mcp_meta=state.previous_mcp_meta
+        )
         formatted = format_orchestrated_response(result)
         
         return JSONResponse({
@@ -1337,7 +1365,11 @@ async def chat_endpoint(request: Request):
         
         # orchestrate_full_response 사용
         session_id, state = SESSION_STORE.get(None)
-        result = orchestrate_full_response(user_message, state, skip_onboarding=False)
+        result = orchestrate_full_response(
+            user_message, state, 
+            skip_onboarding=False,
+            previous_mcp_meta=state.previous_mcp_meta
+        )
         formatted = format_orchestrated_response(result)
         
         return JSONResponse({
