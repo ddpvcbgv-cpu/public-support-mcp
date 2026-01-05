@@ -239,6 +239,8 @@ def orchestrate_full_response(
     
     # 🔹 Onboarding (최초 1회만, 스킵 조건 확인 후)
     if state.interaction_count == 0 and not skip_onboarding:
+        # 🆕 역할 고정 프롬프트 주입 플래그 추가 (Onboarding도 첫 진입이므로)
+        response["_is_first_response"] = True
         response["onboarding"] = ONBOARDING_MESSAGE
         # Onboarding 후에는 사용자가 입력할 때까지 대기
         state.interaction_count += 1
@@ -336,17 +338,25 @@ def format_orchestrated_response(orchestrated: Dict[str, Any], state: Optional[S
     
     # 🆕 ChatGPT 역할 고정 프롬프트 주입 (세션 최초 호출 시)
     from constants import CHATGPT_ROLE_LOCK_PROMPT
-    if state and orchestrated.get("_is_first_response", False):
-        # _is_first_response 플래그가 True이면 첫 번째 실제 상담 응답
-        # 프롬프트를 맨 앞에 추가
+    should_inject_prompt = state and orchestrated.get("_is_first_response", False)
+    
+    # Onboarding
+    if "onboarding" in orchestrated:
+        # 🆕 Onboarding에도 역할 고정 프롬프트 주입 (첫 진입이므로)
+        if should_inject_prompt:
+            lines.append(CHATGPT_ROLE_LOCK_PROMPT)
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+        lines.append(orchestrated["onboarding"])
+        return "\n".join(lines)
+    
+    # Onboarding이 아닌 경우에도 역할 고정 프롬프트 주입
+    if should_inject_prompt:
         lines.append(CHATGPT_ROLE_LOCK_PROMPT)
         lines.append("")
         lines.append("---")
         lines.append("")
-    
-    # Onboarding
-    if "onboarding" in orchestrated:
-        return orchestrated["onboarding"]
     
     # ① 상황 요약
     if "step_1_situation_summary" in orchestrated:
