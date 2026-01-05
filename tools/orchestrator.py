@@ -353,7 +353,7 @@ def format_orchestrated_response(orchestrated: Dict[str, Any]) -> str:
         cards = step3.get("cards", [])
         
         if cards:
-            lines.append(f"지금 상황을 기준으로 보면, {domain} 분야에서 열려 있는 선택지를 정리해봤어요.")
+            lines.append(f"지금 상황을 기준으로 보면, {domain} 분야에서 열려 있는 선택지입니다.")
             lines.append("")
             
             for i, card in enumerate(cards, 1):

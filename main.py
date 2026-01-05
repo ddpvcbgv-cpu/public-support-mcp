@@ -621,7 +621,8 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
                 card_name = policy_info.get("card_name", "")
                 policy_name = policy_info.get("policy_name", "")
                 text += f"[{card_name}]은(는) 보통 다음과 같은 제도와 연결되는 경우가 많습니다:\n"
-                text += f"  → {policy_name}"
+                text += f"  → {policy_name}\n"
+                text += "\n(지금은 해당 여부를 판단하는 단계는 아닙니다.)"
             
             return [{"type": "text", "text": text}]
     
