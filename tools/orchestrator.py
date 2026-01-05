@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Dict, Any, Optional
 
-from state import SessionState
+from state import ConversationPhase, SessionState
 from constants import REQUIRED_PHRASES, ONBOARDING_MESSAGE
 
 from tools.normalize import normalize_user_context
@@ -276,14 +276,21 @@ def orchestrate_full_response(
     cards_result = rank_support_cards(state)
     response["step_3_benefit_cards"] = cards_result
     
+    # 🆕 v2: phase 기반 실행 단계 제어
     # 🔹 ④ 지금 바로 할 수 있는 행동 (1~3단계)
-    actions_result = generate_action_steps(state)
-    fallback_result = generate_fallback_paths(state)
-    
-    response["step_4_action_steps"] = {
-        "actions": actions_result,
-        "fallback": fallback_result,
-    }
+    # PRE_DECISION 단계에서는 실행 단계를 포함하지 않음
+    # EXECUTION_READY 단계에서만 실행 단계 포함
+    if state.phase >= ConversationPhase.EXECUTION_READY:
+        actions_result = generate_action_steps(state)
+        fallback_result = generate_fallback_paths(state)
+        
+        response["step_4_action_steps"] = {
+            "actions": actions_result,
+            "fallback": fallback_result,
+        }
+    else:
+        # PRE_DECISION 또는 DIRECTION_SELECTED 단계에서는 실행 단계 제외
+        response["step_4_action_steps"] = None
     
     # 🔹 지역 정보 수집 (필요 시)
     if not state.region_hint:
@@ -398,7 +405,8 @@ def format_orchestrated_response(orchestrated: Dict[str, Any]) -> str:
                 lines.append("")
     
     # ④ 행동 단계
-    if "step_4_action_steps" in orchestrated:
+    # 🆕 v2: phase 기반 제어 - EXECUTION_READY 단계에서만 표시
+    if "step_4_action_steps" in orchestrated and orchestrated["step_4_action_steps"] is not None:
         step4 = orchestrated["step_4_action_steps"]
         actions = step4.get("actions", {})
         
