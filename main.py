@@ -475,8 +475,15 @@ def _policy_trigger(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]
                 state.phase = ConversationPhase.DIRECTION_SELECTED
     
     # 카드 선택 의도 키워드 감지 (추가 전이 조건)
-    CARD_SELECTION_KEYWORDS = ["1번", "2번", "3번", "이거", "이 카드", 
-                               "선택할게요", "이걸로", "이것으로", "이걸 선택"]
+    CARD_SELECTION_KEYWORDS = [
+        "1번", "2번", "3번", "이거", "이 카드", 
+        "선택할게요", "이걸로", "이것으로", "이걸 선택",
+        # 🆕 v2 보완: 자세히 알고 싶다는 표현도 카드 선택으로 간주
+        "더 자세히", "자세히", "알고싶어요", "더 알고싶어요",
+        "이거 더", "이거 자세히", "이 카드 더", "이 카드 자세히",
+        "이거 궁금해요", "이거 알고 싶어요", "이거 알고싶어요",
+        "자세히 알려주세요", "더 알려주세요", "구체적으로"
+    ]
     message_lower = message.lower()
     
     if state.phase == ConversationPhase.PRE_DECISION:
@@ -1180,20 +1187,32 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if handler:
         try:
-            # 🆕 v2: generate_action_steps 가드 로직
+            # 🆕 v2: generate_action_steps 가드 로직 및 자동 phase 전이
             if tool == "generate_action_steps":
                 if state.phase == ConversationPhase.PRE_DECISION:
-                    # PRE_DECISION에서는 실행 단계로 넘어갈 수 없음
-                    return JSONResponse({
-                        "ok": False,
-                        "tool": tool,
-                        "arguments": arguments,
-                        "session_id": session_id,
-                        "error": "카드를 먼저 선택해주세요",
-                        "content": [{"type": "text", "text": "먼저 지원 방향을 선택해주시면 실행 방법을 안내해드릴 수 있어요."}],
-                        "isError": True,
-                    })
-                elif state.phase == ConversationPhase.DIRECTION_SELECTED:
+                    # 🆕 v2 보완: PRE_DECISION에서도 generate_action_steps가 호출되면
+                    # 사용자가 카드를 선택한 것으로 간주하고 자동으로 phase 전이
+                    # (shown_cards가 있으면 마지막 카드를 선택한 것으로 간주)
+                    if state.shown_cards:
+                        selected_card = state.shown_cards[-1]
+                        if selected_card not in state.accepted_cards:
+                            state.accepted_cards.append(selected_card)
+                        # DIRECTION_SELECTED로 전이
+                        state.phase = ConversationPhase.DIRECTION_SELECTED
+                    else:
+                        # 카드가 없으면 에러 반환
+                        return JSONResponse({
+                            "ok": False,
+                            "tool": tool,
+                            "arguments": arguments,
+                            "session_id": session_id,
+                            "error": "카드를 먼저 선택해주세요",
+                            "content": [{"type": "text", "text": "먼저 지원 방향을 선택해주시면 실행 방법을 안내해드릴 수 있어요."}],
+                            "isError": True,
+                        })
+                
+                # DIRECTION_SELECTED 또는 EXECUTION_READY 단계에서 실행 단계로 전이
+                if state.phase == ConversationPhase.DIRECTION_SELECTED:
                     # phase 전이
                     state.phase = ConversationPhase.EXECUTION_READY
             
