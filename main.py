@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from schemas import BenefitCard, RichAttachment, RichResponse, Visual, ProgressBar
-from state import SESSION_STORE, SessionState
+from state import ConversationPhase, SESSION_STORE, SessionState
 from constants import ONBOARDING_MESSAGE
 from tools.actions import generate_action_steps
 from tools.cards import rank_support_cards
@@ -458,7 +458,38 @@ def _region(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
 
 def _policy_trigger(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     message = str(args.get("message", "") or "").strip()
-    return reveal_policy_name_if_triggered(message, state)
+    result = reveal_policy_name_if_triggered(message, state)
+    
+    # 🆕 v2: phase 전이 로직
+    if result.get("triggered") and result.get("trigger_type") == "card_selection":
+        policy_info = result.get("policy_info", {})
+        card_name = policy_info.get("card_name")
+        
+        if card_name:
+            # accepted_cards에 추가 (중복 방지)
+            if card_name not in state.accepted_cards:
+                state.accepted_cards.append(card_name)
+            
+            # phase 전이
+            if state.phase == ConversationPhase.PRE_DECISION:
+                state.phase = ConversationPhase.DIRECTION_SELECTED
+    
+    # 카드 선택 의도 키워드 감지 (추가 전이 조건)
+    CARD_SELECTION_KEYWORDS = ["1번", "2번", "3번", "이거", "이 카드", 
+                               "선택할게요", "이걸로", "이것으로", "이걸 선택"]
+    message_lower = message.lower()
+    
+    if state.phase == ConversationPhase.PRE_DECISION:
+        if any(keyword in message_lower for keyword in CARD_SELECTION_KEYWORDS):
+            # shown_cards에서 선택된 카드 추론 (간단한 로직)
+            if state.shown_cards:
+                # 마지막으로 보여진 카드를 선택한 것으로 간주
+                selected_card = state.shown_cards[-1]
+                if selected_card not in state.accepted_cards:
+                    state.accepted_cards.append(selected_card)
+                state.phase = ConversationPhase.DIRECTION_SELECTED
+    
+    return result
 
 
 def _followup(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
@@ -493,7 +524,7 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
 }
 
 
-def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = None, error: str | None = None, client_type: str = "default") -> List[Dict[str, str]]:
+def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = None, error: str | None = None, client_type: str = "default", state: SessionState | None = None) -> List[Dict[str, str]]:
     """도구 실행 결과를 AI가 읽을 수 있는 텍스트로 변환 (레거시 호환)
     
     Args:
@@ -502,6 +533,7 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
         result: 도구 실행 결과
         error: 에러 메시지
         client_type: 클라이언트 타입 ("playmcp" | "chatgpt" | "default")
+        state: 세션 상태 (v2: 카드 안전화를 위해 필요)
     """
     if error:
         return [{"type": "text", "text": f"도구 실행 중 오류: {error}"}]
@@ -538,30 +570,57 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
                 # v0.50 엔진 철학 반영: "선택지를 차분하게 정리"
                 text = f"지금 상황을 기준으로 보면, {domain} 분야에서 열려 있는 선택지를 정리해봤어요.\n\n"
                 
+                # 🆕 v2: 카드 안전화를 위한 import
+                from tools.normalize import sanitize_card_text
+                
                 for i, card in enumerate(cards, 1):
                     card_title = card.get('card', '')
                     text += f"\n[{card_title}]\n\n"
                     
                     # 🆕 v1.1.1: Evidence Line 추가
+                    # 🆕 v2: 카드 텍스트 안전화 적용
                     if card.get('이게_뭐냐면'):
                         description = card.get('이게_뭐냐면', '').rstrip()
+                        # 안전화 적용
+                        if state:
+                            description = sanitize_card_text(description, state.phase)
                         evidence_line = " 근거: 공식 안내 참조 · 공공 지원 안내 (검증 2025-12)"
                         text += f"이게 뭐냐면:\n{description + evidence_line}\n\n"
                     
                     if card.get('왜_지금_맞냐면'):
-                        text += f"왜 지금 맞냐면:\n{card.get('왜_지금_맞냐면')}\n\n"
+                        why_text = card.get('왜_지금_맞냐면', '')
+                        # 안전화 적용
+                        if state:
+                            why_text = sanitize_card_text(why_text, state.phase)
+                        text += f"왜 지금 맞냐면:\n{why_text}\n\n"
                     
                     if card.get('지금_하실_수_있는_말'):
-                        text += f"지금 하실 수 있는 말:\n\"{card.get('지금_하실_수_있는_말')}\"\n\n"
+                        what_to_say = card.get('지금_하실_수_있는_말', '')
+                        # 안전화 적용
+                        if state:
+                            what_to_say = sanitize_card_text(what_to_say, state.phase)
+                        text += f"지금 하실 수 있는 말:\n\"{what_to_say}\"\n\n"
                     
                     if card.get('where'):
-                        text += f"어디로:\n{card.get('where')}\n\n"
+                        where_text = card.get('where', '')
+                        # 안전화 적용 (연락처 맥락은 유지되지만 다른 부분은 안전화)
+                        if state:
+                            where_text = sanitize_card_text(where_text, state.phase)
+                        text += f"어디로:\n{where_text}\n\n"
                     
                     if card.get('how'):
-                        text += f"방법:\n{card.get('how')}\n\n"
+                        how_text = card.get('how', '')
+                        # 안전화 적용
+                        if state:
+                            how_text = sanitize_card_text(how_text, state.phase)
+                        text += f"방법:\n{how_text}\n\n"
                     
                     if card.get('막히면'):
-                        text += f"막히면:\n{card.get('막히면')}\n\n"
+                        fallback_text = card.get('막히면', '')
+                        # 안전화 적용
+                        if state:
+                            fallback_text = sanitize_card_text(fallback_text, state.phase)
+                        text += f"막히면:\n{fallback_text}\n\n"
                 
                 return [{"type": "text", "text": text}]
     
@@ -892,7 +951,7 @@ def _build_rich_response(
         )
     
     # 기타 도구는 기존 방식 사용
-    legacy_content = _build_content(tool, arguments, result, error)
+    legacy_content = _build_content(tool, arguments, result, error, state=state)
     return RichResponse(
         content=legacy_content[0]["text"] if legacy_content else "결과 없음",
         attachments=[],
@@ -1017,7 +1076,8 @@ async def _process_mcp_request(payload: dict, request: Request) -> dict:
                     tool_name, 
                     arguments, 
                     result=result,
-                    client_type=client_type  # 🆕 PlayMCP 전용 포맷
+                    client_type=client_type,  # 🆕 PlayMCP 전용 포맷
+                    state=state  # 🆕 v2: 카드 안전화를 위해 state 전달
                 )
                 response = {
                     "jsonrpc": "2.0",
@@ -1120,6 +1180,23 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if handler:
         try:
+            # 🆕 v2: generate_action_steps 가드 로직
+            if tool == "generate_action_steps":
+                if state.phase == ConversationPhase.PRE_DECISION:
+                    # PRE_DECISION에서는 실행 단계로 넘어갈 수 없음
+                    return JSONResponse({
+                        "ok": False,
+                        "tool": tool,
+                        "arguments": arguments,
+                        "session_id": session_id,
+                        "error": "카드를 먼저 선택해주세요",
+                        "content": [{"type": "text", "text": "먼저 지원 방향을 선택해주시면 실행 방법을 안내해드릴 수 있어요."}],
+                        "isError": True,
+                    })
+                elif state.phase == ConversationPhase.DIRECTION_SELECTED:
+                    # phase 전이
+                    state.phase = ConversationPhase.EXECUTION_READY
+            
             result = handler(arguments, state)
             # 세션이 있으면 저장 (Stateless 권장이지만 호환성을 위해 유지)
             if session_id:
@@ -1146,7 +1223,7 @@ async def call_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "arguments": arguments,
                     "session_id": session_id,
                     "result": result,
-                    "content": _build_content(tool, arguments, result=result),
+                    "content": _build_content(tool, arguments, result=result, state=state),
                     "isError": False,
                 }
             return JSONResponse(response)

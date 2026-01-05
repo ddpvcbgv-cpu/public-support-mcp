@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -7,6 +8,13 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from schemas import ConversationTurn, UserProfile
+
+
+class ConversationPhase(str, Enum):
+    """대화 단계를 나타내는 Enum"""
+    PRE_DECISION = "PRE_DECISION"
+    DIRECTION_SELECTED = "DIRECTION_SELECTED"
+    EXECUTION_READY = "EXECUTION_READY"
 
 
 class SessionState(BaseModel):
@@ -25,6 +33,9 @@ class SessionState(BaseModel):
     conversation_history: List[ConversationTurn] = Field(default_factory=list, description="대화 히스토리")
     user_profile: UserProfile = Field(default_factory=UserProfile, description="추론된 사용자 프로파일")
     interaction_count: int = Field(default=0, description="상호작용 횟수")
+    
+    # 🆕 v2: 대화 단계 제어
+    phase: ConversationPhase = Field(default=ConversationPhase.PRE_DECISION, description="현재 대화 단계")
 
 
 class SessionStore:
