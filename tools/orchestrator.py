@@ -310,23 +310,39 @@ def orchestrate_full_response(
     safety_message = compose_safe_response(state)
     response["step_7_safety"] = safety_message
     
+    # 🆕 역할 고정 프롬프트 주입 플래그 추가 (세션 최초 호출 시)
+    # interaction_count가 0이면 onboarding 또는 첫 번째 실제 응답
+    if state.interaction_count == 0:
+        response["_is_first_response"] = True
+    
     # 상호작용 카운트 증가
     state.interaction_count += 1
     
     return response
 
 
-def format_orchestrated_response(orchestrated: Dict[str, Any]) -> str:
+def format_orchestrated_response(orchestrated: Dict[str, Any], state: Optional[SessionState] = None) -> str:
     """
     orchestrate_full_response의 결과를 읽기 쉬운 텍스트로 변환합니다.
     
     Args:
         orchestrated: orchestrate_full_response 반환값
+        state: 세션 상태 (선택적, 역할 고정 프롬프트 주입을 위해 사용)
     
     Returns:
         포맷팅된 텍스트 응답
     """
     lines = []
+    
+    # 🆕 ChatGPT 역할 고정 프롬프트 주입 (세션 최초 호출 시)
+    from constants import CHATGPT_ROLE_LOCK_PROMPT
+    if state and orchestrated.get("_is_first_response", False):
+        # _is_first_response 플래그가 True이면 첫 번째 실제 상담 응답
+        # 프롬프트를 맨 앞에 추가
+        lines.append(CHATGPT_ROLE_LOCK_PROMPT)
+        lines.append("")
+        lines.append("---")
+        lines.append("")
     
     # Onboarding
     if "onboarding" in orchestrated:

@@ -510,7 +510,7 @@ def _orchestrate(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     orchestrated = orchestrate_full_response(user_message, state, skip_onboarding, client_type=client_type)
     return {
         "orchestrated": orchestrated,
-        "formatted_text": format_orchestrated_response(orchestrated)
+        "formatted_text": format_orchestrated_response(orchestrated, state=state)  # 🆕 state 전달
     }
 
 
@@ -547,6 +547,16 @@ def _build_content(tool: str | None, arguments: Dict[str, Any], result: Any = No
     
     if not result:
         return [{"type": "text", "text": "결과 없음"}]
+    
+    # 🆕 수정 요구 3: 카드 선택 이전 출력 제한 (ChatGPT 전용)
+    # PRE_DECISION 단계에서는 단일 선택 질문만 허용
+    if client_type == "chatgpt" and state and state.phase == ConversationPhase.PRE_DECISION:
+        # 도구 호출이 발생했으므로 빈 응답 반환 (tool_call = end of turn)
+        # 또는 최소한의 선택 질문만 허용
+        if tool and tool != "orchestrate_full_response":
+            # 다른 도구 호출 시 빈 응답
+            return [{"type": "text", "text": ""}]
+        # orchestrate_full_response는 카드 목록을 포함하므로 허용
     
     # 각 도구별 결과 포맷팅
     if tool == "normalize_user_context":
@@ -1432,7 +1442,7 @@ async def orchestrate_full_response_endpoint(request: Request):
         # orchestrate_full_response 사용
         session_id, state = SESSION_STORE.get(None)
         result = orchestrate_full_response(user_message, state, skip_onboarding=skip_onboarding)
-        formatted = format_orchestrated_response(result)
+        formatted = format_orchestrated_response(result, state=state)  # 🆕 state 전달
         
         return JSONResponse({
             "orchestrated": result.get("orchestrated", {}),
@@ -1460,7 +1470,7 @@ async def chat_endpoint(request: Request):
         # orchestrate_full_response 사용
         session_id, state = SESSION_STORE.get(None)
         result = orchestrate_full_response(user_message, state, skip_onboarding=False)
-        formatted = format_orchestrated_response(result)
+        formatted = format_orchestrated_response(result, state=state)  # 🆕 state 전달
         
         return JSONResponse({
             "response": formatted
