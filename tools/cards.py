@@ -317,16 +317,36 @@ def rank_support_cards(state: SessionState) -> Dict[str, object]:
     # 스코어링 시스템 적용
     from tools.scoring import rank_benefits_by_score
     
-    domain = state.chosen_domain or _guess_domain(state)
-    available_cards = CARD_LIBRARY.get(domain, [])
-
-    if not available_cards:
-        available_cards = CARD_LIBRARY[DOMAIN_PRIORITY[0]]
-
+    # 🆕 v3f: Signal Level 기반 강제 분기
+    if state.signal_level == "LEVEL_3":
+        # LEVEL_3: 강제 도메인 고정, 카드 1개만
+        domain = state.forced_domain
+        if not domain:
+            # 안전장치: forced_domain이 None이면 안전 기본값
+            domain = "의료·돌봄"
+        max_cards = 1  # 절대 1개만
+        
+        available_cards = CARD_LIBRARY.get(domain, [])
+        if not available_cards:
+            # 도메인에 카드가 없으면 폴백 카드 사용
+            available_cards = CARD_LIBRARY.get("_FALLBACK", [])
+        
+    elif state.signal_level == "LEVEL_2":
+        # LEVEL_2: 우선 도메인, 카드 2개
+        domain = state.primary_domain or state.chosen_domain or _guess_domain(state)
+        max_cards = 2
+        available_cards = CARD_LIBRARY.get(domain, [])
+        
+    else:
+        # LEVEL_1: 기존 로직 유지
+        domain = state.chosen_domain or _guess_domain(state)
+        available_cards = CARD_LIBRARY.get(domain, [])
+        if not available_cards:
+            available_cards = CARD_LIBRARY[DOMAIN_PRIORITY[0]]
+        max_cards = 3 if state.urgency_level <= 2 else 2
+    
     # 점수 기반 정렬
     scored_cards = rank_benefits_by_score(available_cards, state)
-    
-    max_cards = 3 if state.urgency_level <= 2 else 2
     selected = scored_cards[:max_cards]
 
     state.shown_cards = _deduplicate(state.shown_cards + [card["card"] for card in selected])

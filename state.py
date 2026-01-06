@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -36,6 +36,20 @@ class SessionState(BaseModel):
     
     # 🆕 v2: 대화 단계 제어
     phase: ConversationPhase = Field(default=ConversationPhase.PRE_DECISION, description="현재 대화 단계")
+    
+    # 🆕 v3f: Signal Detection Layer
+    signal_level: Literal["LEVEL_1", "LEVEL_2", "LEVEL_3"] = Field(
+        default="LEVEL_1",
+        description="위험/취약 시그널 레벨"
+    )
+    forced_domain: Optional[str] = Field(
+        default=None,
+        description="LEVEL_3에서 강제로 고정된 도메인"
+    )
+    primary_domain: Optional[str] = Field(
+        default=None,
+        description="LEVEL_2에서 우선 도메인"
+    )
 
 
 class SessionStore:

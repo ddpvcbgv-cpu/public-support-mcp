@@ -18,6 +18,7 @@ from tools.safety import compose_safe_response
 from tools.region import collect_region_context
 from tools.policy_trigger import reveal_policy_name_if_triggered
 from tools.followup import suggest_followup_options
+from tools.signal import detect_signal
 
 
 def _should_unlock_domain(user_message: str, state: SessionState) -> bool:
@@ -245,6 +246,18 @@ def orchestrate_full_response(
         # Onboarding 후에는 사용자가 입력할 때까지 대기
         state.interaction_count += 1
         return response
+    
+    # 🆕 v3f: Signal Detection Layer (가장 먼저 실행, normalize_user_context 이전)
+    try:
+        signal = detect_signal(user_message)
+        state.signal_level = signal["signal_level"]
+        state.forced_domain = signal.get("forced_domain")
+        state.primary_domain = signal.get("primary_domain")
+    except Exception:
+        # 에러 발생 시 안전 기본값
+        state.signal_level = "LEVEL_1"
+        state.forced_domain = None
+        state.primary_domain = None
     
     # 🔹 ① 지금 상황 요약 (판단 없이)
     normalize_result = normalize_user_context(user_message, state)
