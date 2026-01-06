@@ -189,20 +189,6 @@ def orchestrate_full_response(
     """
     response = {}
     
-    # 🆕 v3f: Signal Detection Layer (가장 먼저 실행, Onboarding 이전!)
-    try:
-        signal = detect_signal(user_message)
-        state.signal_level = signal["signal_level"]
-        state.forced_domain = signal.get("forced_domain")
-        state.primary_domain = signal.get("primary_domain")
-        is_info_request = signal.get("_is_info_request", False)
-    except Exception:
-        # 에러 발생 시 안전 기본값
-        state.signal_level = "LEVEL_1"
-        state.forced_domain = None
-        state.primary_domain = None
-        is_info_request = False
-    
     # 🆕 ChatGPT 전용: domain_lock 및 orchestrate 1회성 제한
     if client_type == "chatgpt":
         # 1. orchestrate 재호출 허용 여부 체크
@@ -253,18 +239,25 @@ def orchestrate_full_response(
             skip_onboarding = True
     
     # 🔹 Onboarding (최초 1회만, 스킵 조건 확인 후)
-    # 🆕 LEVEL_3 시그널이 있으면 Onboarding 스킵하고 바로 카드 제공
     if state.interaction_count == 0 and not skip_onboarding:
-        if state.signal_level == "LEVEL_3":
-            # LEVEL_3 시그널이 있으면 Onboarding 스킵
-            skip_onboarding = True
-        else:
-            # 🆕 역할 고정 프롬프트 주입 플래그 추가 (Onboarding도 첫 진입이므로)
-            response["_is_first_response"] = True
-            response["onboarding"] = ONBOARDING_MESSAGE
-            # Onboarding 후에는 사용자가 입력할 때까지 대기
-            state.interaction_count += 1
-            return response
+        # 🆕 역할 고정 프롬프트 주입 플래그 추가 (Onboarding도 첫 진입이므로)
+        response["_is_first_response"] = True
+        response["onboarding"] = ONBOARDING_MESSAGE
+        # Onboarding 후에는 사용자가 입력할 때까지 대기
+        state.interaction_count += 1
+        return response
+    
+    # 🆕 v3f: Signal Detection Layer (가장 먼저 실행, normalize_user_context 이전)
+    try:
+        signal = detect_signal(user_message)
+        state.signal_level = signal["signal_level"]
+        state.forced_domain = signal.get("forced_domain")
+        state.primary_domain = signal.get("primary_domain")
+    except Exception:
+        # 에러 발생 시 안전 기본값
+        state.signal_level = "LEVEL_1"
+        state.forced_domain = None
+        state.primary_domain = None
     
     # 🔹 ① 지금 상황 요약 (판단 없이)
     normalize_result = normalize_user_context(user_message, state)
@@ -295,14 +288,8 @@ def orchestrate_full_response(
     }
     
     # 🔹 ③ 지금 단계에서 먼저 열어볼 '혜택 카드' (TOP 2~3)
-    # 🆕 정보 요청이고 구체적 키워드가 없으면 카드 제공 제한
-    if is_info_request and not state.user_keywords:
-        # 정보 요청만 있고 구체적 키워드가 없으면 카드 제공 안 함
-        response["step_3_benefit_cards"] = None
-        response["_info_request"] = True
-    else:
-        cards_result = rank_support_cards(state)
-        response["step_3_benefit_cards"] = cards_result
+    cards_result = rank_support_cards(state)
+    response["step_3_benefit_cards"] = cards_result
     
     # 🆕 v2: phase 기반 실행 단계 제어
     # 🔹 ④ 지금 바로 할 수 있는 행동 (1~3단계)
@@ -406,7 +393,7 @@ def format_orchestrated_response(orchestrated: Dict[str, Any], state: Optional[S
             lines.append("")
     
     # ③ 혜택 카드
-    if "step_3_benefit_cards" in orchestrated and orchestrated["step_3_benefit_cards"] is not None:
+    if "step_3_benefit_cards" in orchestrated:
         step3 = orchestrated["step_3_benefit_cards"]
         domain = step3.get("domain", "")
         cards = step3.get("cards", [])
@@ -455,12 +442,6 @@ def format_orchestrated_response(orchestrated: Dict[str, Any], state: Optional[S
                 
                 lines.append("---")
                 lines.append("")
-    
-    # 🆕 정보 요청 처리
-    if orchestrated.get("_info_request"):
-        lines.append("구체적인 상황을 알려주시면 더 정확한 지원을 안내해드릴 수 있어요.")
-        lines.append("나이, 소득, 주거 상황, 가족 구성, 걱정되는 부분 등을 편하게 말씀해 주세요.")
-        lines.append("")
     
     # ④ 행동 단계
     # 🆕 v2: phase 기반 제어 - EXECUTION_READY 단계에서만 표시
