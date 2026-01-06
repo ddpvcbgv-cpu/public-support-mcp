@@ -28,6 +28,7 @@ def detect_signal(message: str) -> Dict[str, Optional[str]]:
             "signal_level": "LEVEL_1" | "LEVEL_2" | "LEVEL_3",
             "forced_domain": Optional[str],  # LEVEL_3 only
             "primary_domain": Optional[str], # LEVEL_2 only
+            "_is_info_request": Optional[bool],  # 정보 요청 여부
         }
     """
     if not message:
@@ -35,10 +36,34 @@ def detect_signal(message: str) -> Dict[str, Optional[str]]:
             "signal_level": "LEVEL_1",
             "forced_domain": None,
             "primary_domain": None,
+            "_is_info_request": False,
         }
     
     try:
         msg = message.lower()
+        
+        # 정보 요청 시그널 감지 (구체적 키워드 없이 정보만 요청)
+        from tools.domains import DOMAIN_HINTS
+        info_request_patterns = [
+            r"어떤.*혜택.*받을.*수",
+            r"어떤.*지원.*받을.*수",
+            r"무엇.*받을.*수",
+            r"궁금해요",
+            r"알고.*싶어요",
+            r"알려주세요",
+            r"어떤.*있어요",
+            r"받을.*수.*있",
+            r"혜택.*뭐"
+        ]
+        
+        is_info_request = any(re.search(p, msg) for p in info_request_patterns)
+        
+        # 구체적 키워드 체크
+        has_specific_keyword = False
+        for domain, cues in DOMAIN_HINTS.items():
+            if any(cue in msg for cue in cues):
+                has_specific_keyword = True
+                break
         
         # LEVEL_3: 강한 위험 시그널 (맥락 무관, 발견 즉시 고정)
         LEVEL_3_PATTERNS = {
@@ -71,6 +96,7 @@ def detect_signal(message: str) -> Dict[str, Optional[str]]:
                         "signal_level": "LEVEL_3",
                         "forced_domain": mapped_domain,
                         "primary_domain": None,
+                        "_is_info_request": False,
                     }
         
         # LEVEL_2: 맥락 의존적 패턴 (정규식으로 맥락 확인)
@@ -78,7 +104,11 @@ def detect_signal(message: str) -> Dict[str, Optional[str]]:
             "의료·돌봄": [
                 r"(싱글맘|한부모).*(돌봄|간병|육아|아이)",
                 r"(장애|발달).*(돌봄|의료|치료)",
-                r"중증아동"
+                r"중증아동",
+                # 🆕 노인 돌봄 시그널
+                r"(할머니|할아버지|부모|조부모|어르신).*(모시고|돌봄|간병|혼자)",
+                r"(혼자|홀로).*(모시고|돌봄|간병|부양)",
+                r"노인.*(돌봄|간병|부양|모시고)"
             ],
             "생활 유지": [
                 r"(생활비|식비|공과금).*(부족|모자라|막막|연체)",
@@ -97,13 +127,16 @@ def detect_signal(message: str) -> Dict[str, Optional[str]]:
                         "signal_level": "LEVEL_2",
                         "forced_domain": None,
                         "primary_domain": domain,
+                        "_is_info_request": False,
                     }
         
         # LEVEL_1: 기본 탐색 (기존 로직 유지)
+        # 정보 요청이고 구체적 키워드가 없으면 플래그 설정
         return {
             "signal_level": "LEVEL_1",
             "forced_domain": None,
             "primary_domain": None,
+            "_is_info_request": is_info_request and not has_specific_keyword,
         }
     
     except Exception:
@@ -112,5 +145,6 @@ def detect_signal(message: str) -> Dict[str, Optional[str]]:
             "signal_level": "LEVEL_1",
             "forced_domain": None,
             "primary_domain": None,
+            "_is_info_request": False,
         }
 
