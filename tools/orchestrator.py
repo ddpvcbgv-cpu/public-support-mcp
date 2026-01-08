@@ -14,7 +14,15 @@ from tools.domains import expose_available_domains, DOMAIN_HINTS
 from tools.cards import rank_support_cards
 from tools.actions import generate_action_steps
 from tools.fallback import generate_fallback_paths
-from tools.safety import compose_safe_response
+from tools.safety import (
+    compose_safe_response,
+    detect_safety_risk,
+    RiskLevel,
+    RiskType,
+    build_level1_self_harm_message,
+    build_level1_violence_message,
+    build_level2_bullying_or_stress_message,
+)
 from tools.region import collect_region_context
 from tools.policy_trigger import reveal_policy_name_if_triggered
 from tools.followup import suggest_followup_options
@@ -288,6 +296,38 @@ def orchestrate_full_response(
         응답 구조 (온보딩 또는 ①~② 단계만)
     """
     response: Dict[str, Any] = {}
+    msg = (user_message or "").strip()
+    
+    # 0) 안전 리스크 감지 (항상 최우선)
+    risk = detect_safety_risk(msg)
+    state.last_safety_risk = risk  # state에 기록
+    
+    if risk["level"] == RiskLevel.LEVEL_1:
+        # 즉시 안전이 우선인 상황 → 온보딩/분야/카드 모두 스킵
+        if risk["type"] == RiskType.SELF_HARM:
+            safety_text = build_level1_self_harm_message()
+        else:
+            safety_text = build_level1_violence_message()
+        
+        response["_safety_level"] = "LEVEL_1"
+        response["_safety_type"] = risk["type"].value
+        response["safety_message"] = safety_text
+        # 다른 단계는 포함하지 않고 여기서 바로 종료
+        return response
+    
+    if risk["level"] == RiskLevel.LEVEL_2:
+        # 심각한 위기 상황(왕따/학교폭력/괴롭힘 등)
+        safety_text = build_level2_bullying_or_stress_message(risk)
+        response["_safety_level"] = "LEVEL_2"
+        response["_safety_type"] = risk["type"].value
+        response["safety_message"] = safety_text
+        
+        # LEVEL_2의 경우, 이 턴에서는 안전 안내만 주고,
+        # 다음 턴에서 사용자가 조금 더 말해주면
+        # 그때부터 일반 온보딩/분야 안내를 이어갈 수 있게 한다.
+        return response
+    
+    # --- 여기서부터는 기존 일반 로직 (LEVEL_3, 즉시 위기 아님) ---
     
     # 0. 먼저 상황 정규화 → user_keywords 채우기
     normalize_result = normalize_user_context(user_message, state)
@@ -406,6 +446,8 @@ def orchestrate_full_response(
 def format_orchestrated_response(orchestrated: Dict[str, Any], state: Optional[SessionState] = None) -> str:
     """
     orchestrate_full_response의 결과를 읽기 쉬운 텍스트로 변환합니다.
+    🆕 변경점:
+    - safety_message가 있으면 그걸 최우선으로 출력하고, 나머지 단계는 생략/축소.
     
     Args:
         orchestrated: orchestrate_full_response 반환값
@@ -415,6 +457,21 @@ def format_orchestrated_response(orchestrated: Dict[str, Any], state: Optional[S
         포맷팅된 텍스트 응답
     """
     lines = []
+    
+    # 0) LEVEL_1/2 안전 메시지 우선 출력
+    safety_msg = orchestrated.get("safety_message")
+    if safety_msg:
+        lines.append(safety_msg)
+        lines.append("")  # 한 줄 띄우기
+        
+        # LEVEL_2인 경우, 아주 짧게 "원하면 조금 더 구체적인 지원을 같이 보자" 정도만 붙일 수도 있음
+        if orchestrated.get("_safety_level") == "LEVEL_2":
+            lines.append(
+                "지금 이야기해주신 것만으로도 상황이 얼마나 힘든지 전해져요.\n"
+                "조금 숨을 돌릴 수 있는 지원을 함께 찾고 싶다면,\n"
+                "편한 만큼만 지금 상황(학교/직장/집 중 어디인지 등)을 덧붙여주셔도 괜찮아요."
+            )
+        return "\n".join(lines)
     
     # 🆕 ChatGPT 역할 고정 프롬프트 주입 (세션 최초 호출 시)
     from constants import CHATGPT_ROLE_LOCK_PROMPT

@@ -56,6 +56,12 @@ class SessionState(BaseModel):
         default_factory=list,
         description="이전 턴에 보여준 분야 목록 (1번/2번 매칭용)"
     )
+    
+    # 🆕 안전 리스크 감지: 마지막으로 감지된 안전 리스크 정보
+    last_safety_risk: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="마지막으로 감지된 안전 리스크 정보 (level, type, raw_match)"
+    )
 
 
 class SessionStore:
