@@ -194,35 +194,38 @@ MCP_SPEC = {
             "name": "rank_support_cards",
             "description": """특정 지원 분야의 혜택 카드 2-3개 제공 (한국 공공 지원).
 
-⚠️ 중요: 특정 분야가 명시된 경우 바로 이 도구를 사용하세요.
-orchestrate_full_response를 거치지 않고 바로 호출 가능합니다.
+⚠️ 중요: 이 도구는 '사용자가 분야 메뉴에서 명시적으로 선택한 경우'에만 사용하세요.
 
 핵심 분야: 주거·월세 | 생활 유지 | 의료·돌봄 | 고용·교육 | 심리·정서
 확장 분야: 문화·여가 | 평생교육 | 참여·활동 | 법률·권리 상담 | 교통·이동 지원 | 디지털·정보 접근 (사용자 명시적 요청 시)
 
 호출 시점:
-- 분야 키워드 + 필요/절실 표현: "월세 지원이 필요해요", "고정지원이 절실해요"
-- 분야 키워드 + 힘듦 표현: "주거가 너무 힘들어요", "생활비가 부족해요"
-- 분야 키워드 + 요청: "주거 지원 받고 싶어요", "의료 지원이 필요해요"
-- 명시적 선택: "주거 쪽으로 더 자세히", "의료 관련 지원이 궁금해요"
-- "더 자세히", "구체적으로", "다른 옵션은?" 같은 후속 질문 시
+- 사용자가 분야 메뉴에서 "1번이요", "2번이요" 같은 번호로 선택한 경우
+- 사용자가 "주거요", "주거·월세요", "고용·교육이요"처럼
+  메뉴에 나온 '분야 이름'을 직접 선택한 경우
+- 이미 state.chosen_domain이 설정된 상태에서
+  "더 자세히 알고 싶어요", "다른 카드도 볼 수 있을까요?" 같은
+  후속 요청이 들어온 경우
 
 호출 금지:
-- 분야가 불명확하거나 여러 개일 때 (orchestrate_full_response 사용)
-- 처음 상담 시작할 때 분야가 없을 때 (orchestrate_full_response 사용)
+- "취업 지원이 필요해요", "월세가 너무 힘들어요"처럼
+  단지 '분야 키워드 + 힘듦/필요' 표현만 있는 경우
+  → 이런 경우에는 먼저 orchestrate_full_response를 호출해
+    상황 정리 및 '분야 메뉴'를 보여주세요.
+- 분야가 불명확하거나 여러 개가 섞여 있을 때
+  → orchestrate_full_response 사용
+- 처음 상담 시작할 때 (분야 선택 전 단계)
+  → orchestrate_full_response 사용
 
 예시:
-- "월세 지원이 필요해요" → domain: "주거·월세"
-- "고정지원이 절실해요" → domain: "생활 유지"
-- "주거가 너무 힘들어요" → domain: "주거·월세"
-- "생활비가 부족해요" → domain: "생활 유지"
-- "의료 지원 받고 싶어요" → domain: "의료·돌봄"
-- "취업 관련 지원이 궁금해요" → domain: "고용·교육"
-- "법률 상담이 필요해요" → domain: "법률·권리 상담"
-- "교통비가 부담돼요" → domain: "교통·이동 지원"
-- "디지털 격차로 신청이 어려워요" → domain: "디지털·정보 접근"
+- "22살이고 소득은 없고 가족과 함께 살아요. 취업 준비에 도움을 받고 싶어요."
+  → 1) orchestrate_full_response로 상황 요약 + 분야 메뉴
+     2) 사용자가 "1번이요(고용·교육)" 선택
+     3) 그 다음에만 rank_support_cards(domain="고용·교육") 사용
 
-출력: 각 카드의 "이게 뭐냐면", "왜 지금 맞냐면", "지금 하실 수 있는 말", "어디로", "막히면" 정보""",
+출력:
+각 카드에 대해 "이게 뭐냐면", "왜 지금 맞냐면", "지금 하실 수 있는 말",
+"어디로", "막히면" 정보를 제공합니다.""",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -519,16 +522,24 @@ def _detect_domain_selection(user_message: str, available_domains: List[str]) ->
     """
     msg = user_message.strip().lower()
 
-    # 1) 번호 선택 ("1", "1번", "1번이요")
+    # 1) 번호 선택 - 공백 포함 패턴도 처리
     for i, domain in enumerate(available_domains, 1):
-        if msg == str(i):
+        num_str = str(i)
+        
+        # 정확한 번호 매칭
+        if msg == num_str:
             return domain
-        if f"{i}번" in msg:
+        
+        # "1번", "1 번" (공백 포함)
+        if (num_str + "번") in msg or (num_str + " 번") in msg:
             return domain
-        if f"{i}번이요" in msg:
+        
+        # "1번이요", "1 번이요" (공백 포함)
+        if (num_str + "번이요") in msg or (num_str + " 번이요") in msg:
             return domain
 
     # 2) 도메인 이름 일부 언급
+    # available_domains에 있는 도메인의 일부 단어가 메시지에 포함된 경우만 선택
     for domain in available_domains:
         parts = [p.strip().lower() for p in domain.split("·")]
         if any(p and p in msg for p in parts):
@@ -554,22 +565,21 @@ def _orchestrate(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
             "formatted_text": format_orchestrated_response(orchestrated, state=state),
         }
 
-    # 1) 도메인 선택 감지 (직전 턴에서 분야 안내가 있었음)
+    # 1) 도메인 선택 감지 (직전 턴에서 분야 안내가 있었을 때만)
     available_domains = getattr(state, "last_shown_domains", None)
-    if not available_domains:
-        from tools.domains import expose_available_domains
-        domains_result = expose_available_domains(state)
-        available_domains = domains_result.get("domains", []) or []
-
-    selected_domain = _detect_domain_selection(user_message, available_domains)
-    if selected_domain:
-        state.chosen_domain = selected_domain
-        cards_result = rank_support_cards(state)
-        orchestrated = {"step_3_benefit_cards": cards_result}
-        return {
-            "orchestrated": orchestrated,
-            "formatted_text": format_orchestrated_response(orchestrated, state=state),
-        }
+    
+    # 🆕 중요: last_shown_domains가 없으면 도메인 선택 감지를 시도하지 않음
+    # expose_available_domains를 다시 호출하지도 않음
+    if available_domains:
+        selected_domain = _detect_domain_selection(user_message, available_domains)
+        if selected_domain:
+            state.chosen_domain = selected_domain
+            cards_result = rank_support_cards(state)
+            orchestrated = {"step_3_benefit_cards": cards_result}
+            return {
+                "orchestrated": orchestrated,
+                "formatted_text": format_orchestrated_response(orchestrated, state=state),
+            }
 
     # 2) 도메인 미선택 상태 → 상황 정리 / 분야 안내
     orchestrated = orchestrate_full_response(

@@ -141,19 +141,30 @@ def _is_emotion_only(user_message: str, state: SessionState) -> bool:
     return False
 
 
-def _has_minimum_context(state: SessionState) -> bool:
+def _has_minimum_context(state: SessionState, user_message: str = "") -> bool:
     """
     정보가 최소한 충분히 모였는지 판단
     - 나이/소득/주거/가족/걱정/건강 중 2개 이상 잡히면 True
+    
+    Args:
+        state: 세션 상태
+        user_message: 최근 사용자 메시지 (키워드 추출 보완용)
     
     Returns:
         True: 정보 충분 (분야 안내 단계로 진행 가능)
         False: 정보 부족 (온보딩 필요)
     """
+    # 1) state.user_keywords → 문자열로 합치기
     if isinstance(state.user_keywords, list):
-        text = " ".join(state.user_keywords).lower()
+        keywords_text = " ".join(state.user_keywords).lower()
     else:
-        text = str(state.user_keywords).lower()
+        keywords_text = str(state.user_keywords or "").lower()
+
+    # 2) 현재 턴 user_message도 함께 검사
+    message_text = (user_message or "").lower()
+
+    # 3) 최종 텍스트
+    text = f"{keywords_text} {message_text}".strip()
 
     score = 0
 
@@ -201,6 +212,7 @@ def _has_minimum_context(state: SessionState) -> bool:
         "조부모", "할머니", "할아버지",
         "치매", "간병", "돌봄", "보호자", "부양",
         "독거", "혼자 살아요", "혼자 살고",
+        "가족", "가족이랑", "가족과",  # 추가
     ]
     if any(kw in text for kw in family_keywords):
         score += 1
@@ -279,7 +291,8 @@ def orchestrate_full_response(
     
     # 0. 먼저 상황 정규화 → user_keywords 채우기
     normalize_result = normalize_user_context(user_message, state)
-    has_minimum_info = _has_minimum_context(state)
+    # 🆕 중요: _has_minimum_context 호출 시 반드시 user_message를 두 번째 인자로 전달
+    has_minimum_info = _has_minimum_context(state, user_message)
     
     # 1. ChatGPT 전용 로직은 interaction_count > 0일 때만
     if client_type == "chatgpt" and state.interaction_count > 0:
