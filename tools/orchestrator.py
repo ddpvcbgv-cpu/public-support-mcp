@@ -141,6 +141,93 @@ def _is_emotion_only(user_message: str, state: SessionState) -> bool:
     return False
 
 
+def _has_minimum_context(state: SessionState) -> bool:
+    """
+    정보가 최소한 충분히 모였는지 판단
+    - 나이/소득/주거/가족/걱정/건강 중 2개 이상 잡히면 True
+    
+    Returns:
+        True: 정보 충분 (분야 안내 단계로 진행 가능)
+        False: 정보 부족 (온보딩 필요)
+    """
+    if isinstance(state.user_keywords, list):
+        text = " ".join(state.user_keywords).lower()
+    else:
+        text = str(state.user_keywords).lower()
+
+    score = 0
+
+    # 1) 나이·생애주기 정보
+    age_keywords = [
+        "나이", "살", "세",
+        "10대", "20대", "30대", "40대", "50대", "60대", "70대",
+        "청년", "중장년", "노인", "어르신", "미성년자",
+        "초등학생", "중학생", "고등학생", "대학생",
+    ]
+    if any(kw in text for kw in age_keywords):
+        score += 1
+
+    # 2) 주거 정보
+    housing_keywords = [
+        "월세", "전세", "반전세", "보증금",
+        "주거", "집", "방",
+        "고시원", "고시텔", "원룸", "오피스텔", "쉐어하우스", "기숙사",
+        "공공임대", "임대주택", "lh", "행복주택",
+        "노숙", "쪽방", "찜질방", "모텔",
+        "퇴거", "쫓겨", "이사",
+    ]
+    if any(kw in text for kw in housing_keywords):
+        score += 1
+
+    # 3) 소득·고용 정보
+    income_keywords = [
+        "소득", "수입", "월급", "급여", "수당",
+        "알바", "아르바이트", "파트타임", "근로", "일용직",
+        "비정규직", "계약직", "프리랜서",
+        "실직", "실업", "백수", "무직",
+        "취업", "취준", "구직", "이직", "전직",
+        "장기 실업", "경력단절",
+    ]
+    if any(kw in text for kw in income_keywords):
+        score += 1
+
+    # 4) 가족·돌봄·보호자 정보
+    family_keywords = [
+        "싱글맘", "싱글대디", "한부모", "한 부모",
+        "소녀가장", "소년소녀가장", "소녀 가장",
+        "혼자 키워", "아이 키워", "아이를 키우", "육아",
+        "아이", "자녀", "딸", "아들", "애기",
+        "부모님", "부모", "엄마", "아빠",
+        "조부모", "할머니", "할아버지",
+        "치매", "간병", "돌봄", "보호자", "부양",
+        "독거", "혼자 살아요", "혼자 살고",
+    ]
+    if any(kw in text for kw in family_keywords):
+        score += 1
+
+    # 5) 걱정·위기·정서 상태
+    concern_keywords = [
+        "걱정", "고민", "힘들", "막막", "버티기", "버티기 힘들", "버티기 어려워",
+        "부담", "어려움", "어려워요", "위기", "급해", "급한",
+        "불안", "우울", "잠이 안 와", "잠이 안와",
+        "생활비", "월세", "카드값", "빚", "사채", "연체", "압류",
+        "끊길까", "잘릴까", "해고",
+    ]
+    if any(kw in text for kw in concern_keywords):
+        score += 1
+
+    # 6) 건강·의료
+    health_keywords = [
+        "병원", "병원비", "입원", "수술", "진단",
+        "우울증", "불안장애", "공황", "정신과",
+    ]
+    if any(kw in text for kw in health_keywords):
+        score += 1
+
+    # 2개 이상이면 "분야 안내"로 넘어갈 수 있다고 판단
+    return score >= 2
+
+
 def _should_allow_reorchestrate(user_message: str, state: SessionState) -> bool:
     """
     ChatGPT 전용: orchestrate 재호출을 허용해야 하는지 판단
@@ -176,7 +263,8 @@ def orchestrate_full_response(
     client_type: str = "default"
 ) -> Dict[str, Any]:
     """
-    v0.50 엔진 스펙에 따라 ①~⑦ 단계를 자동으로 실행합니다.
+    🆕 수정: 온보딩 / 상황 요약 / 분야 안내까지만 담당
+    카드/제도명/행동 단계는 절대 생성하지 않음
     
     Args:
         user_message: 사용자 입력 메시지
@@ -185,154 +273,120 @@ def orchestrate_full_response(
         client_type: 클라이언트 타입 ("playmcp" | "chatgpt" | "default")
     
     Returns:
-        전체 응답 구조 (①~⑦ 단계 포함)
+        응답 구조 (온보딩 또는 ①~② 단계만)
     """
-    response = {}
+    response: Dict[str, Any] = {}
     
-    # 🆕 ChatGPT 전용: domain_lock 및 orchestrate 1회성 제한
-    if client_type == "chatgpt":
-        # 1. orchestrate 재호출 허용 여부 체크
+    # 0. 먼저 상황 정규화 → user_keywords 채우기
+    normalize_result = normalize_user_context(user_message, state)
+    has_minimum_info = _has_minimum_context(state)
+    
+    # 1. ChatGPT 전용 로직은 interaction_count > 0일 때만
+    if client_type == "chatgpt" and state.interaction_count > 0:
         if not _should_allow_reorchestrate(user_message, state):
-            # 재호출 금지: rank_support_cards 사용 권장 메시지 반환
             current_domain = state.chosen_domain or "현재 선택한 분야"
-            
-            # 🆕 보완: UX 개선된 메시지 (톤 조정)
             response["_redirect_to_rank_cards"] = {
                 "message": (
                     f"이미 {current_domain} 쪽으로 이야기를 나누고 있어서, "
                     f"이제는 해당 지원을 더 자세히 보는 게 좋아 보여요. "
                     f"'rank_support_cards' 도구를 사용해주세요."
                 ),
-                "domain": state.chosen_domain
+                "domain": state.chosen_domain,
             }
             return response
-        
-        # 2. 감정 발화만 있는 경우 상태 유지 (기존 응답 유지)
-        if _is_emotion_only(user_message, state) and state.interaction_count > 0:
-            # 기존 상태 유지 메시지 반환
+
+        if _is_emotion_only(user_message, state):
             response["_emotion_only"] = {
                 "message": (
                     "감정을 표현해주셔서 감사합니다. "
                     "구체적인 지원이 필요하시면 어떤 분야인지 말씀해주세요."
                 ),
-                "maintain_state": True
+                "maintain_state": True,
             }
             return response
     
-    # 🆕 PlayMCP 전용: 사용자 메시지 분석하여 충분한 정보가 있으면 onboarding 자동 스킵
-    if state.interaction_count == 0 and not skip_onboarding and client_type == "playmcp":
-        # 구체적인 정보 키워드 확인
-        info_keywords = ["나이", "살", "세", "소득", "월세", "전세", "주거", "가족", 
-                        "부모", "혼자", "싱글", "학생", "고등학생", "대학생",
-                        "지원", "도움", "필요", "받을 수", "궁금", "알려주세요"]
-        
-        # 명확한 요청 키워드 확인
-        request_keywords = ["받을 수 있나요", "도움이 필요해요", "알려주세요", 
-                           "방법", "어떻게", "무엇", "뭐가", "궁금"]
-        
-        message_lower = user_message.lower()
-        has_info = any(kw in message_lower for kw in info_keywords)
-        has_request = any(kw in message_lower for kw in request_keywords)
-        
-        # 충분한 정보가 있거나 명확한 요청이 있으면 onboarding 스킵
-        if has_info and has_request:
-            skip_onboarding = True
-    
-    # 🔹 Onboarding (최초 1회만, 스킵 조건 확인 후)
-    if state.interaction_count == 0 and not skip_onboarding:
-        # 🆕 역할 고정 프롬프트 주입 플래그 추가 (Onboarding도 첫 진입이므로)
-        response["_is_first_response"] = True
-        response["onboarding"] = ONBOARDING_MESSAGE
-        # Onboarding 후에는 사용자가 입력할 때까지 대기
-        state.interaction_count += 1
-        return response
-    
-    # 🆕 v3f: Signal Detection Layer (가장 먼저 실행, normalize_user_context 이전)
+    # (선택) Signal Detection Layer (기존 코드 유지)
     try:
         signal = detect_signal(user_message)
         state.signal_level = signal["signal_level"]
         state.forced_domain = signal.get("forced_domain")
         state.primary_domain = signal.get("primary_domain")
     except Exception:
-        # 에러 발생 시 안전 기본값
         state.signal_level = "LEVEL_1"
         state.forced_domain = None
         state.primary_domain = None
     
-    # 🔹 ① 지금 상황 요약 (판단 없이)
-    normalize_result = normalize_user_context(user_message, state)
+    # 2. 1턴 처리
+    if state.interaction_count == 0 and not skip_onboarding:
+        # 2-1) 정보가 충분하지 않으면 → 온보딩
+        if not has_minimum_info:
+            response["_is_first_response"] = True
+            response["onboarding"] = ONBOARDING_MESSAGE
+            state.interaction_count += 1
+            return response
+
+        # 2-2) 정보가 충분하면 → 바로 상황 요약 + 분야 안내
+        # 아래 "공통 ①~② 처리" 로직을 그대로 실행 (return 하지 않음)
+    
+    # 3. 2턴 이후: 정보 부족 → 추가 온보딩/질문
+    if state.interaction_count > 0 and not has_minimum_info:
+        response["onboarding"] = (
+            "조금만 더 구체적으로 알려주시면,\n"
+            "지금 상황에 맞는 지원 분야를 정리해드릴 수 있어요.\n\n"
+            + ONBOARDING_MESSAGE
+        )
+        state.interaction_count += 1
+        return response
+    
+    # 4. 여기까지 왔다는 것은: 정보가 충분하고, 도메인이 아직 확정되지 않은 상태
+    #    → ① 상황 요약 + ② 분야 안내만 실행
+    
+    # 4-1) 상황 요약
     response["step_1_situation_summary"] = {
         "intro": REQUIRED_PHRASES["situation_intro"],
         "summary": normalize_result.get("summary", ""),
         "keywords": normalize_result.get("keywords", []),
     }
-    
-    # 🔹 긴급도 평가 (내부 계산용)
+
+    # (선택) 긴급도 평가는 내부용으로만 사용
     urgency_context = {"message": user_message}
     urgency_result = assess_urgency_level(urgency_context, state)
-    
-    # 🔹 ② 지금 상황에서 열려 있는 지원 '분야' 안내
+    # 필요하다면 state에 저장만 하고, 출력에는 쓰지 않아도 됩니다.
+
+    # 4-2) 분야 안내
     domains_result = expose_available_domains(state)
-    domains = domains_result.get("domains", [])
-    
-    # 스마트 기본값 제안 (분야가 3개 이상일 때)
-    smart_default_message = None
-    if len(domains) >= 3:
-        top_3 = " / ".join(domains[:3])
-        smart_default_message = REQUIRED_PHRASES["smart_default"].format(domains=top_3)
-    
+    domains = domains_result.get("domains", []) or []
+
+    # (중요) 이 턴에 실제로 보여준 도메인 목록을 state에 저장 (1번/2번 매칭용)
+    state.last_shown_domains = domains
+
+    # (선택) 도메인 감지 결과로 "추천 1순위"를 맨 앞으로 정렬
+    detected = None
+    # detect_domain_from_message 함수가 있다면 사용 (없으면 None)
+    # 이 함수는 메뉴 정렬용으로만 사용, 실제 도메인 확정에는 사용하지 않음
+
+    if detected and detected in domains:
+        domains.sort(key=lambda d: 0 if d == detected else 1)
+
     response["step_2_available_domains"] = {
         "intro": REQUIRED_PHRASES["domain_intro"],
         "domains": domains,
-        "smart_default": smart_default_message,
+        "selection_prompt": (
+            "한 번에 다 보려 하면 더 막막해질 수 있으니까,\n"
+            "지금 당장 제일 먼저 손대고 싶은 번호 하나만 골라볼게요.\n\n"
+            f"👉 1, 2, {len(domains)}번 중에서 "
+            "\"이것부터 어떻게든 버텨야겠다\" 싶은 번호 하나만 보내주셔도 괜찮아요."
+        ),
     }
-    
-    # 🔹 ③ 지금 단계에서 먼저 열어볼 '혜택 카드' (TOP 2~3)
-    cards_result = rank_support_cards(state)
-    response["step_3_benefit_cards"] = cards_result
-    
-    # 🆕 v2: phase 기반 실행 단계 제어
-    # 🔹 ④ 지금 바로 할 수 있는 행동 (1~3단계)
-    # PRE_DECISION 단계에서는 실행 단계를 포함하지 않음
-    # EXECUTION_READY 단계에서만 실행 단계 포함
-    if state.phase >= ConversationPhase.EXECUTION_READY:
-        actions_result = generate_action_steps(state)
-        fallback_result = generate_fallback_paths(state)
-        
-        response["step_4_action_steps"] = {
-            "actions": actions_result,
-            "fallback": fallback_result,
-        }
-    else:
-        # PRE_DECISION 또는 DIRECTION_SELECTED 단계에서는 실행 단계 제외
-        response["step_4_action_steps"] = None
-    
-    # 🔹 지역 정보 수집 (필요 시)
-    if not state.region_hint:
-        region_result = collect_region_context(state)
-        response["region_collection"] = region_result
-    
-    # 🔹 ⑤ 제도명 공개 트리거 규칙
-    policy_trigger_result = reveal_policy_name_if_triggered(user_message, state)
-    if policy_trigger_result.get("triggered"):
-        response["step_5_policy_reveal"] = policy_trigger_result
-    
-    # 🔹 ⑥ 확장 가능성 안내 (항상 포함)
-    followup_result = suggest_followup_options(state)
-    response["step_6_expansion"] = followup_result
-    
-    # 🔹 ⑦ 감정 안전 문장 (맨 마지막)
-    safety_message = compose_safe_response(state)
-    response["step_7_safety"] = safety_message
-    
-    # 🆕 역할 고정 프롬프트 주입 플래그 추가 (세션 최초 호출 시)
-    # interaction_count가 0이면 onboarding 또는 첫 번째 실제 응답
+
+    # 카드/행동/제도명은 아직 나오지 않는 상태라는 표시
+    response["_domain_not_selected"] = True
+
+    # 🆕 역할 고정 프롬프트 주입 플래그
     if state.interaction_count == 0:
         response["_is_first_response"] = True
-    
-    # 상호작용 카운트 증가
+
     state.interaction_count += 1
-    
     return response
 
 
@@ -384,13 +438,23 @@ def format_orchestrated_response(orchestrated: Dict[str, Any], state: Optional[S
         lines.append("")
         
         if step2.get("domains"):
-            for domain in step2["domains"]:
-                lines.append(f"  • {domain}")
+            # 번호와 함께 표시
+            for i, domain in enumerate(step2["domains"], 1):
+                lines.append(f"{i}) {domain}")
             lines.append("")
         
-        if step2.get("smart_default"):
+        # selection_prompt 추가
+        if step2.get("selection_prompt"):
+            lines.append(step2["selection_prompt"])
+            lines.append("")
+        elif step2.get("smart_default"):
             lines.append(step2["smart_default"])
             lines.append("")
+    
+    # 🆕 도메인 미확정 상태에서는 ③~⑦ 제외
+    if orchestrated.get("_domain_not_selected"):
+        # ①~②까지만 반환
+        return "\n".join(lines)
     
     # ③ 혜택 카드
     if "step_3_benefit_cards" in orchestrated:

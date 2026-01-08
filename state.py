@@ -50,6 +50,12 @@ class SessionState(BaseModel):
         default=None,
         description="LEVEL_2에서 우선 도메인"
     )
+    
+    # 🆕 분야 선택 매칭용: 이전 턴에 보여준 분야 목록
+    last_shown_domains: List[str] = Field(
+        default_factory=list,
+        description="이전 턴에 보여준 분야 목록 (1번/2번 매칭용)"
+    )
 
 
 class SessionStore:

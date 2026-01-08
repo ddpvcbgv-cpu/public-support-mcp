@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -503,14 +503,84 @@ def _followup(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     return suggest_followup_options(state)
 
 
+def _detect_domain_selection(user_message: str, available_domains: List[str]) -> Optional[str]:
+    """
+    분야 선택 감지:
+    - "1번", "1", "1번이요"
+    - "주거요", "주거·월세요", "주거", "월세"
+    등을 실제 도메인 문자열로 매핑
+    
+    Args:
+        user_message: 사용자 입력 메시지
+        available_domains: 이전 턴에 보여준 분야 목록
+    
+    Returns:
+        선택된 도메인 문자열 또는 None
+    """
+    msg = user_message.strip().lower()
+
+    # 1) 번호 선택 ("1", "1번", "1번이요")
+    for i, domain in enumerate(available_domains, 1):
+        if msg == str(i):
+            return domain
+        if f"{i}번" in msg:
+            return domain
+        if f"{i}번이요" in msg:
+            return domain
+
+    # 2) 도메인 이름 일부 언급
+    for domain in available_domains:
+        parts = [p.strip().lower() for p in domain.split("·")]
+        if any(p and p in msg for p in parts):
+            return domain
+
+    return None
+
+
 def _orchestrate(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
+    """
+    🆕 수정: 라우팅 레벨에서 도메인 선택 감지 및 rank_support_cards 호출 처리
+    """
     user_message = str(args.get("user_message", "") or "").strip()
     skip_onboarding = args.get("skip_onboarding", False)
-    client_type = args.get("_client_type", "default")  # 🆕 클라이언트 타입 가져오기
-    orchestrated = orchestrate_full_response(user_message, state, skip_onboarding, client_type=client_type)
+    client_type = args.get("_client_type", "default")
+
+    # 0) 이미 도메인이 선택된 상태 → 카드 단계로
+    if state.chosen_domain:
+        cards_result = rank_support_cards(state)  # state.chosen_domain 사용
+        orchestrated = {"step_3_benefit_cards": cards_result}
+        return {
+            "orchestrated": orchestrated,
+            "formatted_text": format_orchestrated_response(orchestrated, state=state),
+        }
+
+    # 1) 도메인 선택 감지 (직전 턴에서 분야 안내가 있었음)
+    available_domains = getattr(state, "last_shown_domains", None)
+    if not available_domains:
+        from tools.domains import expose_available_domains
+        domains_result = expose_available_domains(state)
+        available_domains = domains_result.get("domains", []) or []
+
+    selected_domain = _detect_domain_selection(user_message, available_domains)
+    if selected_domain:
+        state.chosen_domain = selected_domain
+        cards_result = rank_support_cards(state)
+        orchestrated = {"step_3_benefit_cards": cards_result}
+        return {
+            "orchestrated": orchestrated,
+            "formatted_text": format_orchestrated_response(orchestrated, state=state),
+        }
+
+    # 2) 도메인 미선택 상태 → 상황 정리 / 분야 안내
+    orchestrated = orchestrate_full_response(
+        user_message=user_message,
+        state=state,
+        skip_onboarding=skip_onboarding,
+        client_type=client_type,
+    )
     return {
         "orchestrated": orchestrated,
-        "formatted_text": format_orchestrated_response(orchestrated, state=state)  # 🆕 state 전달
+        "formatted_text": format_orchestrated_response(orchestrated, state=state),
     }
 
 
