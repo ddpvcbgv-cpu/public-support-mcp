@@ -46,11 +46,17 @@ def generate_action_steps(state: SessionState, domain: Optional[str] = None) -> 
             f"예) \"{say_phrase or '지금 상황을 먼저 상담만 받아보고 싶어요.'}\""
         )
 
+        # how_info에서 첫 번째 단계 추출
+        how_phrase = "지원 가능성만 먼저 확인받고 싶다"
+        if how_info:
+            split_result = how_info.split("1)")
+            if split_result and len(split_result) > 1:
+                how_phrase = split_result[0].strip()
+
         tomorrow = (
             "내일은 아래 기관 중 한 곳을 정해서, 오늘 적어둔 문장을 그대로 읽어보세요.\n"
             f"{where_info or '가까운 주민센터나 상담 창구'}\n"
-            f"전화나 방문 시에는, '{(how_info.split('1)')[0] if how_info else '지원 가능성만 먼저 확인받고 싶다'}'"
-            " 라고 덧붙이셔도 좋습니다."
+            f"전화나 방문 시에는, '{how_phrase}' 라고 덧붙이셔도 좋습니다."
         )
 
         stuck = (
