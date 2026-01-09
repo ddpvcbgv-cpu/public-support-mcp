@@ -248,21 +248,20 @@ MCP_SPEC = {
 - 카드 선택 후 실행 방법이 궁금할 때
 - "시작하려면 어떻게 하나요?" 같은 실행 의도
 
-예시:
-- "구체적으로 어떻게 시작하나요?"
-- "오늘 바로 할 수 있는 일이 뭐예요?"
-- "실행 계획을 알려주세요"
-- "당장 뭐부터 하면 돼요?"
+⚠️ 중요:
+- 가능하면 직전에 선택된 분야(domain)를 인자로 전달하세요.
+  예: rank_support_cards(domain="의료·돌봄") 이후 → generate_action_steps(domain="의료·돌봄")
+- domain이 없으면 state.chosen_domain을 기본값으로 사용합니다.
 
-호출 금지:
-- 아직 카드를 선택하지 않았을 때
-- orchestrate_full_response가 이미 행동 단계를 포함한 경우
-- 단순 정보 질문 단계
-
-출력: today(오늘 할 일), tomorrow(내일까지), fallback(막히면 대안)""",
+출력: today(오늘 할 일), tomorrow(내일까지), stuck(막히면 대안)""",
             "inputSchema": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "domain": {
+                        "type": "string",
+                        "description": "선택한 지원 분야 (예: '의료·돌봄', '주거·월세', '생활 유지', '고용·교육', '심리·정서' 등)",
+                    }
+                },
                 "additionalProperties": False,
             },
         },
@@ -442,8 +441,15 @@ def _cards(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
     return rank_support_cards(state)
 
 
-def _actions(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
-    return generate_action_steps(state)
+def _actions(args: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
+    """
+    generate_action_steps 도구 호출 래퍼.
+
+    - args.domain 이 있으면 우선 사용
+    - 없으면 state.chosen_domain 을 generate_action_steps 에서 활용
+    """
+    domain = args.get("domain")
+    return generate_action_steps(state, domain=domain)
 
 
 def _fallback(_: Dict[str, Any], state: SessionState) -> Dict[str, Any]:
